@@ -17,7 +17,8 @@ const TRUNCATION_NOTICE: &str = "\n\n<!-- mdlens: truncated at token budget -->"
 
 #[derive(Parser)]
 #[command(name = "mdlens")]
-#[command(about = "Token-efficient Markdown structure CLI for agents")]
+#[command(about = "Token-efficient Markdown structure CLI for AI agents")]
+#[command(long_about = "mdlens parses Markdown files into a hierarchical section tree with\ndotted IDs, token estimates, and bounded-context packing.\n\nDesigned for AI agents that need to navigate, search, and pack\nMarkdown documentation into context windows efficiently.\n\nRun `mdlens <command> --help` for detailed usage.")]
 struct Cli {
     #[command(subcommand)]
     command: Commands,
@@ -25,15 +26,15 @@ struct Cli {
 
 #[derive(Subcommand)]
 enum Commands {
-    /// Show a map of Markdown file sections
+    /// Show section hierarchy with token estimates for a file or directory
     Tree(TreeArgs),
-    /// Extract a specific section by ID, path, or line range
+    /// Extract a section by ID, heading path, or line range
     Read(ReadArgs),
-    /// Search Markdown files and return section-level matches
+    /// Search files and return section-level matches with snippets
     Search(SearchArgs),
-    /// Build a bounded context packet from selected sections
+    /// Pack selected sections into a bounded token budget
     Pack(PackArgs),
-    /// Inspect Markdown file sizes and token estimates
+    /// Inspect file sizes, word counts, and token estimates
     Stats(StatsArgs),
 }
 
@@ -41,13 +42,13 @@ enum Commands {
 struct TreeArgs {
     /// File or directory to analyze
     path: String,
-    /// Output JSON
+    /// Output JSON (machine-readable with schema_version)
     #[arg(long)]
     json: bool,
     /// Limit section depth shown
     #[arg(long)]
     max_depth: Option<usize>,
-    /// Show preamble section if present
+    /// Show preamble section (content before first heading)
     #[arg(long)]
     include_preamble: bool,
     /// For directory input, include per-file summaries
@@ -59,10 +60,10 @@ struct TreeArgs {
 struct ReadArgs {
     /// File to read from
     file: String,
-    /// Section ID to extract
+    /// Section ID to extract (e.g., "1.2.3" — dotted hierarchy)
     #[arg(long, conflicts_with_all = ["heading_path", "lines"])]
     id: Option<String>,
-    /// Heading path to extract (e.g., "Usage > Config")
+    /// Heading path to extract (e.g., "Usage>Configuration"; escape literal > as \>)
     #[arg(long, conflicts_with_all = ["id", "lines"])]
     heading_path: Option<String>,
     /// Line range to extract (e.g., "120:190")
@@ -71,7 +72,7 @@ struct ReadArgs {
     /// Include parent headings above the section excerpt
     #[arg(long)]
     parents: bool,
-    /// Include all child sections
+    /// Include all child sections (default: true unless --no-children)
     #[arg(long, conflicts_with = "no_children")]
     children: bool,
     /// Only include heading and direct body before first child heading
@@ -80,7 +81,7 @@ struct ReadArgs {
     /// Truncate output to approximate token budget
     #[arg(long)]
     max_tokens: Option<usize>,
-    /// Output JSON
+    /// Output JSON (machine-readable with schema_version)
     #[arg(long)]
     json: bool,
 }
@@ -89,21 +90,21 @@ struct ReadArgs {
 struct SearchArgs {
     /// File or directory to search
     path: String,
-    /// Search query
+    /// Search query (plain text or regex with --regex)
     query: String,
-    /// Output JSON
+    /// Output JSON (machine-readable with schema_version)
     #[arg(long)]
     json: bool,
     /// Use regex for the query
     #[arg(long)]
     regex: bool,
-    /// Case-sensitive search
+    /// Case-sensitive search (default: case-insensitive)
     #[arg(long)]
     case_sensitive: bool,
-    /// Maximum number of results
+    /// Maximum number of results (default: 20)
     #[arg(long, default_value_t = 20)]
     max_results: usize,
-    /// Context lines around each match
+    /// Context lines around each match (default: 2)
     #[arg(long, default_value_t = 2)]
     context_lines: usize,
 }
@@ -112,10 +113,10 @@ struct SearchArgs {
 struct PackArgs {
     /// File or directory to pack from
     path: String,
-    /// Comma-separated section IDs
+    /// Comma-separated section IDs to include
     #[arg(long, conflicts_with_all = ["paths", "search"])]
     ids: Option<String>,
-    /// Semicolon-separated heading paths
+    /// Semicolon-separated heading paths to include
     #[arg(long, conflicts_with_all = ["ids", "search"])]
     paths: Option<String>,
     /// Search query to find sections to pack
@@ -124,11 +125,11 @@ struct PackArgs {
     /// Required: maximum token budget
     #[arg(long)]
     max_tokens: usize,
-    /// Include parent heading context
+    /// Include parent heading context above selected sections
     #[arg(long)]
     parents: bool,
-    /// Avoid duplicate nested sections (default: true)
-    #[arg(long, conflicts_with = "no_dedupe", default_value_t = true)]
+    /// Avoid duplicate nested sections (default)
+    #[arg(long, conflicts_with = "no_dedupe")]
     dedupe: bool,
     /// Allow duplicate sections in the final pack
     #[arg(long, conflicts_with = "dedupe")]
@@ -139,13 +140,13 @@ struct PackArgs {
     /// Case-sensitive search when selecting sections via --search
     #[arg(long)]
     case_sensitive: bool,
-    /// Maximum number of search results to consider for --search
+    /// Maximum number of search results to consider for --search (default: 20)
     #[arg(long, default_value_t = 20)]
     max_results: usize,
-    /// Context lines when searching via --search
+    /// Context lines when searching via --search (default: 2)
     #[arg(long, default_value_t = 2)]
     context_lines: usize,
-    /// Output JSON
+    /// Output JSON (machine-readable with schema_version)
     #[arg(long)]
     json: bool,
 }
@@ -161,10 +162,10 @@ enum StatsSort {
 struct StatsArgs {
     /// File or directory to analyze
     path: String,
-    /// Output JSON
+    /// Output JSON (machine-readable with schema_version)
     #[arg(long)]
     json: bool,
-    /// Sort by field
+    /// Sort by field: path, tokens, or lines (default: path)
     #[arg(long, value_enum, default_value_t = StatsSort::Path)]
     sort: StatsSort,
     /// Show top N results
