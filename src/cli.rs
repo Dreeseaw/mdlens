@@ -6,6 +6,8 @@ use std::cmp::Reverse;
 use std::collections::{HashMap, HashSet};
 use std::io::{self, BufRead};
 
+use std::path::Path;
+
 use crate::errors;
 use crate::model::Section;
 use crate::pack::{pack_by_ids, PackSearchOptions};
@@ -591,7 +593,7 @@ fn build_parent_map(
 }
 
 fn cmd_search(args: SearchArgs) -> Result<()> {
-    let mut results = search_files(
+    let (mut results, files_searched) = search_files(
         &args.path,
         &args.query,
         args.case_sensitive,
@@ -661,6 +663,23 @@ fn cmd_search(args: SearchArgs) -> Result<()> {
         };
         println!("{}", serde_json::to_string_pretty(&output)?);
     } else {
+        if args.canonical && results.is_empty() {
+            let file_names: Vec<String> = files_searched
+                .iter()
+                .map(|p| {
+                    Path::new(p)
+                        .file_name()
+                        .and_then(|n| n.to_str())
+                        .unwrap_or(p)
+                        .to_string()
+                })
+                .collect();
+            println!(
+                "[no matches in {} canonical docs ({}); drop --canonical for a broader search]",
+                file_names.len(),
+                file_names.join(", ")
+            );
+        }
         println!("{}", render_search(&results, args.content));
     }
 

@@ -8,6 +8,7 @@ use crate::parse::load_markdown;
 use crate::render::{SearchResult, SearchSnippet};
 
 /// Search markdown files for a query and return section-level results.
+/// Returns (results, files_searched).
 pub fn search_files(
     root: &str,
     query: &str,
@@ -16,7 +17,7 @@ pub fn search_files(
     max_results: usize,
     context_lines: usize,
     canonical_only: bool,
-) -> Result<Vec<SearchResult>> {
+) -> Result<(Vec<SearchResult>, Vec<String>)> {
     let files = discover_markdown_files_with_mode(root, canonical_only)?;
     let mut all_results: Vec<SearchResult> = Vec::new();
 
@@ -45,7 +46,7 @@ pub fn search_files(
             .then(lhs.section_id.cmp(&rhs.section_id))
     });
 
-    Ok(all_results.into_iter().take(max_results).collect())
+    Ok((all_results.into_iter().take(max_results).collect(), files))
 }
 
 /// Search within a single document.
@@ -170,38 +171,45 @@ struct MatchLine {
 }
 
 fn source_priority(path: &str) -> i32 {
-    let lower = path.to_ascii_lowercase();
     let file = Path::new(path)
         .file_name()
         .and_then(|name| name.to_str())
         .unwrap_or(path)
         .to_ascii_lowercase();
-    let stem = Path::new(path)
+    let stem_lower = Path::new(path)
         .file_stem()
         .and_then(|name| name.to_str())
         .unwrap_or(path)
         .to_ascii_lowercase();
+    let stem_orig = Path::new(path)
+        .file_stem()
+        .and_then(|name| name.to_str())
+        .unwrap_or(path);
 
     let mut score = 0i32;
-    if file == "sgocr_champion.md" {
-        score += 140;
-    } else if file == "champion.md" {
+    // Champion docs are the highest-priority source-of-truth by convention
+    if stem_lower.ends_with("_champion") || file == "champion.md" {
         score += 120;
     }
-    if file == "cleo_state.md" || stem.ends_with("_state") || file == "research_state.md" {
+    // State/status tracking docs are the current authoritative record
+    if stem_lower.ends_with("_state") || stem_lower.ends_with("_status") || file == "state.md" || file == "status.md" {
         score += 110;
     }
-    if file.starts_with("00_") || lower.contains("orientation") {
+    // Numbered intro docs: 00_ is typically the orientation/index
+    if file.starts_with("00_") {
         score += 95;
     }
-    if file.starts_with("01_") || lower.contains("benchmark_protocol") {
+    // 01_ is typically the first protocol or spec doc
+    if file.starts_with("01_") {
         score += 90;
     }
-    if lower.contains("global_task_context") {
+    // Named overview/orientation/readme files are canonical entry points
+    if stem_lower.contains("orientation") || stem_lower.contains("overview") || stem_lower.contains("readme") || stem_lower.contains("getting_started") {
         score += 85;
     }
-    if lower.contains("experiment_db") {
-        score += 80;
+    // All-uppercase stems (e.g. README, TRACKER, SPEC) are convention for important docs
+    if is_all_caps_stem(stem_orig) {
+        score += 20;
     }
     if is_dated_doc(&file) {
         score -= 25;
@@ -210,29 +218,31 @@ fn source_priority(path: &str) -> i32 {
 }
 
 fn is_canonical_doc_path(path: &str) -> bool {
-    let lower = path.to_ascii_lowercase();
     let file = Path::new(path)
         .file_name()
         .and_then(|name| name.to_str())
         .unwrap_or(path)
         .to_ascii_lowercase();
-    let stem = Path::new(path)
+    let stem_lower = Path::new(path)
         .file_stem()
         .and_then(|name| name.to_str())
         .unwrap_or(path)
         .to_ascii_lowercase();
-
-    file == "sgocr_champion.md"
+    stem_lower.ends_with("_champion")
         || file == "champion.md"
-        || file == "cleo_state.md"
-        || file == "research_state.md"
-        || stem.ends_with("_state")
+        || stem_lower.ends_with("_state")
+        || stem_lower.ends_with("_status")
+        || file == "state.md"
+        || file == "status.md"
         || file.starts_with("00_")
         || file.starts_with("01_")
-        || lower.contains("orientation")
-        || lower.contains("benchmark_protocol")
-        || lower.contains("global_task_context")
-        || lower.contains("experiment_db")
+        || stem_lower.contains("orientation")
+        || stem_lower.contains("overview")
+        || file == "readme.md"
+}
+
+fn is_all_caps_stem(stem: &str) -> bool {
+    !stem.is_empty() && stem.chars().all(|c| c.is_ascii_uppercase() || c == '_' || c.is_ascii_digit())
 }
 
 fn section_priority(path: &[String]) -> i32 {
@@ -246,8 +256,9 @@ fn section_priority(path: &[String]) -> i32 {
         "benchmark protocol",
         "metric",
         "formula",
-        "operational score",
-        "precision_first_score",
+        "overview",
+        "summary",
+        "key",
     ] {
         if joined.contains(marker) {
             score += 12;
@@ -261,10 +272,16 @@ fn path_depth(path: &str) -> usize {
 }
 
 fn is_dated_doc(file_name: &str) -> bool {
+    // Detect experiment-counter prefixes (10+) like 14_notes.md, 124_analysis.md.
+    // Exempt single-digit and 00/01 prefixes which are conventional ordering.
     let mut parts = file_name.split('_');
     if let Some(first) = parts.next() {
         if !first.is_empty() && first.chars().all(|c| c.is_ascii_digit()) {
-            return true;
+            if let Ok(n) = first.parse::<usize>() {
+                if n >= 10 {
+                    return true;
+                }
+            }
         }
     }
     file_name.contains("2026-")
@@ -319,46 +336,44 @@ mod tests {
     #[test]
     fn source_priority_prefers_canonical_docs() {
         assert!(
-            source_priority("tasks/mm_bridge/docs/SGOCR_CHAMPION.md")
-                > source_priority("tasks/mm_bridge/docs/124_sgocr_dev200_coverage_and_eval_analysis_2026-04-06.md")
+            source_priority("docs/PROJECT_CHAMPION.md")
+                > source_priority("docs/124_analysis_2026-04-06.md")
         );
         assert!(
-            source_priority("tasks/vlm_cleo/docs/CLEO_STATE.md")
-                > source_priority(
-                    "tasks/vlm_cleo/docs/14_vlm_cleo_cleo423dinner_turn_2026-04-23.md"
-                )
+            source_priority("docs/CURRENT_STATE.md")
+                > source_priority("docs/14_dev_notes_2026-04-23.md")
+        );
+        assert!(
+            source_priority("docs/00_orientation.md")
+                > source_priority("docs/55_archived_experiment.md")
         );
     }
 
     #[test]
     fn dated_docs_are_penalized() {
-        assert!(is_dated_doc(
-            "124_sgocr_dev200_coverage_and_eval_analysis_2026-04-06.md"
-        ));
-        assert!(!is_dated_doc("SGOCR_CHAMPION.md"));
+        assert!(is_dated_doc("124_analysis_2026-04-06.md"));
+        assert!(is_dated_doc("notes_2025-11-01.md"));
+        assert!(!is_dated_doc("PROJECT_CHAMPION.md"));
+        assert!(!is_dated_doc("00_orientation.md"));
     }
 
     #[test]
     fn section_priority_prefers_formula_like_headings() {
-        let formula = vec![
-            "Source of Truth".to_string(),
-            "precision_first_score".to_string(),
-        ];
+        let formula = vec!["Source of Truth".to_string(), "Formula".to_string()];
         let generic = vec!["Misc Notes".to_string()];
         assert!(section_priority(&formula) > section_priority(&generic));
     }
 
     #[test]
     fn canonical_doc_filter_prefers_source_of_truth_docs() {
-        assert!(is_canonical_doc_path(
-            "tasks/mm_bridge/docs/SGOCR_CHAMPION.md"
-        ));
-        assert!(is_canonical_doc_path("tasks/vlm_cleo/docs/CLEO_STATE.md"));
-        assert!(is_canonical_doc_path(
-            "tasks/mm_bridge/docs/01_benchmark_protocol.md"
-        ));
+        assert!(is_canonical_doc_path("docs/PROJECT_CHAMPION.md"));
+        assert!(is_canonical_doc_path("docs/CURRENT_STATE.md"));
+        assert!(is_canonical_doc_path("docs/01_benchmark_protocol.md"));
+        assert!(is_canonical_doc_path("docs/00_orientation.md"));
+        assert!(is_canonical_doc_path("docs/README.md"));
         assert!(!is_canonical_doc_path(
-            "tasks/mm_bridge/docs/124_sgocr_dev200_coverage_and_eval_analysis_2026-04-06.md"
+            "docs/124_analysis_2026-04-06.md"
         ));
+        assert!(!is_canonical_doc_path("docs/55_archived_run.md"));
     }
 }

@@ -79,7 +79,7 @@ pub fn pack_by_search(
     max_tokens: usize,
     options: PackSearchOptions,
 ) -> Result<PackResult> {
-    let results = search_files(
+    let (results, _) = search_files(
         root,
         query,
         options.case_sensitive,
