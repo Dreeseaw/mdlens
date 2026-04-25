@@ -4,6 +4,12 @@ version = "0.1.0"
 edition = "2021"
 description = "Token-efficient Markdown structure CLI for agents"
 license = "MIT"
+readme = "README.md"
+homepage = "https://github.com/Dreeseaw/mdlens"
+repository = "https://github.com/Dreeseaw/mdlens"
+documentation = "https://docs.rs/mdlens"
+keywords = ["markdown", "cli", "ai", "agents", "documentation"]
+categories = ["command-line-utilities", "text-processing"]
 
 [dependencies]
 clap = { version = "4", features = ["derive"] }
