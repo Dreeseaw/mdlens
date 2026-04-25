@@ -15,22 +15,42 @@ pub fn count_words(text: &str) -> usize {
     text.split_whitespace().count()
 }
 
-/// Count bytes in text.
-pub fn count_bytes(text: &str) -> usize {
-    text.len()
-}
-
-/// Count characters in text.
-pub fn count_chars(text: &str) -> usize {
-    text.chars().count()
-}
-
 /// Count lines in text.
 pub fn count_lines(text: &str) -> usize {
     if text.is_empty() {
         return 0;
     }
     text.lines().count()
+}
+
+/// Truncate text to fit within a token budget, appending a notice.
+pub fn truncate_to_tokens(text: &str, max_tokens: usize, notice: &str) -> String {
+    if estimate_tokens(text) <= max_tokens {
+        return text.to_string();
+    }
+
+    let notice_tokens = estimate_tokens(notice);
+    if max_tokens <= notice_tokens {
+        return String::new();
+    }
+
+    let target_chars = (max_tokens - notice_tokens) * 4;
+    let mut char_count = 0usize;
+    let mut truncate_at = 0usize;
+
+    for (idx, ch) in text.char_indices() {
+        char_count += 1;
+        if char_count > target_chars {
+            break;
+        }
+        truncate_at = idx + ch.len_utf8();
+    }
+
+    if truncate_at == 0 {
+        return String::new();
+    }
+
+    format!("{}{}", &text[..truncate_at], notice)
 }
 
 #[cfg(test)]

@@ -20,7 +20,11 @@ pub struct Section {
     pub title: String,
     pub level: u8,
     pub path: Vec<String>,
+    /// First line of this section (1-indexed, includes heading).
     pub line_start: usize,
+    /// Last line of this section's full subtree (1-indexed).
+    /// This spans all nested children, not just direct content.
+    /// Use `extract_direct_content` to get content before the first child.
     pub line_end: usize,
     pub content_line_start: usize,
     pub byte_start: usize,
@@ -141,11 +145,6 @@ impl Document {
         self.find_sections_by_path(path).into_iter().next()
     }
 
-    /// Get lines for a section by ID.
-    pub fn get_section_lines<'a>(&self, id: &str, lines: &'a [String]) -> Option<&'a [String]> {
-        self.find_section_by_id(id)
-            .map(|s| s.extract_content(lines))
-    }
 }
 
 fn collect_sections_by_exact_path<'a>(

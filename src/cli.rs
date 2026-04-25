@@ -11,7 +11,7 @@ use crate::render::{
     render_pack, render_read, render_search, render_stats, render_tree, PackIncluded, StatsEntry,
 };
 use crate::search::search_files;
-use crate::tokens::estimate_tokens;
+use crate::tokens::{estimate_tokens, truncate_to_tokens};
 
 const TRUNCATION_NOTICE: &str = "\n\n<!-- mdlens: truncated at token budget -->";
 
@@ -258,7 +258,7 @@ fn cmd_read(args: ReadArgs) -> Result<()> {
     let lines = &parsed.lines;
     let include_children = !args.no_children || args.children;
 
-    let (section_text, section_meta, selector_type, selector_value) = if let Some(ref id) = args.id
+    let (section_text, section_meta, selector_type, selector_value, section_ref) = if let Some(ref id) = args.id
     {
         let section = doc
             .find_section_by_id(id)
@@ -269,7 +269,7 @@ fn cmd_read(args: ReadArgs) -> Result<()> {
             section.extract_direct_content(lines)
         }
         .join("\n");
-        (content, SectionMeta::from(section), "id", id.clone())
+        (content, SectionMeta::from(section), "id", id.clone(), Some(section))
     } else if let Some(ref path_str) = args.heading_path {
         let section = find_unique_section_by_path(doc, path_str)?;
         let content = if include_children {
@@ -283,6 +283,7 @@ fn cmd_read(args: ReadArgs) -> Result<()> {
             SectionMeta::from(section),
             "path",
             path_str.clone(),
+            Some(section),
         )
     } else if let Some(ref lines_str) = args.lines {
         let parts: Vec<&str> = lines_str.split(':').collect();
@@ -320,6 +321,7 @@ fn cmd_read(args: ReadArgs) -> Result<()> {
             },
             "lines",
             format!("{}:{}", start, end),
+            None,
         )
     } else {
         return Err(anyhow::anyhow!(
@@ -330,12 +332,14 @@ fn cmd_read(args: ReadArgs) -> Result<()> {
     let mut full_content = String::new();
 
     if args.parents {
-        let parents = find_parent_headings(doc, selector_type, &selector_value);
-        for line_idx in parents {
-            if !full_content.is_empty() {
-                full_content.push_str("\n\n");
+        if let Some(sec) = section_ref {
+            let parents = find_parent_headings(doc, sec);
+            for line_idx in parents {
+                if !full_content.is_empty() {
+                    full_content.push_str("\n\n");
+                }
+                full_content.push_str(&lines[line_idx - 1]);
             }
-            full_content.push_str(&lines[line_idx - 1]);
         }
     }
 
@@ -427,33 +431,21 @@ impl From<&Section> for SectionMeta {
 /// Find parent heading line numbers for a section.
 fn find_parent_headings(
     doc: &crate::model::Document,
-    selector_type: &str,
-    selector_value: &str,
+    section: &Section,
 ) -> Vec<usize> {
-    let section = if selector_type == "id" {
-        doc.find_section_by_id(selector_value)
-    } else {
-        let parts = parse_heading_path(selector_value);
-        doc.find_section_by_path(&parts)
-    };
-
-    if let Some(sec) = section {
-        let mut parent_map: std::collections::HashMap<String, Option<String>> =
-            std::collections::HashMap::new();
-        build_parent_map(&doc.sections, None, &mut parent_map);
-        let mut chain = Vec::new();
-        let mut current_id = sec.id.clone();
-        while let Some(Some(pid)) = parent_map.get(&current_id) {
-            if let Some(parent_sec) = doc.find_section_by_id(pid) {
-                chain.push(parent_sec.line_start);
-            }
-            current_id = pid.clone();
+    let mut parent_map: std::collections::HashMap<String, Option<String>> =
+        std::collections::HashMap::new();
+    build_parent_map(&doc.sections, None, &mut parent_map);
+    let mut chain = Vec::new();
+    let mut current_id = section.id.clone();
+    while let Some(Some(pid)) = parent_map.get(&current_id) {
+        if let Some(parent_sec) = doc.find_section_by_id(pid) {
+            chain.push(parent_sec.line_start);
         }
-        chain.reverse();
-        chain
-    } else {
-        Vec::new()
+        current_id = pid.clone();
     }
+    chain.reverse();
+    chain
 }
 
 fn find_unique_section_by_path<'a>(
@@ -560,7 +552,7 @@ fn cmd_search(args: SearchArgs) -> Result<()> {
 }
 
 fn cmd_pack(args: PackArgs) -> Result<()> {
-    let dedupe = !args.no_dedupe || args.dedupe;
+    let dedupe = !args.no_dedupe;
     let result = if let Some(ref ids_str) = args.ids {
         let ids: Vec<String> = ids_str.split(',').map(|s| s.trim().to_string()).collect();
         pack_by_ids(&args.path, &ids, args.max_tokens, args.parents, dedupe)?
@@ -861,29 +853,5 @@ fn serialize_sections(
 }
 
 fn truncate_content_to_tokens(content: &str, max_tokens: usize) -> String {
-    if estimate_tokens(content) <= max_tokens {
-        return content.to_string();
-    }
-
-    let notice_tokens = estimate_tokens(TRUNCATION_NOTICE);
-    if max_tokens <= notice_tokens {
-        return String::new();
-    }
-
-    let target_chars = (max_tokens - notice_tokens) * 4;
-    let mut char_count = 0usize;
-    let mut truncate_at = 0usize;
-    for (idx, ch) in content.char_indices() {
-        char_count += 1;
-        if char_count > target_chars {
-            break;
-        }
-        truncate_at = idx + ch.len_utf8();
-    }
-
-    if truncate_at == 0 {
-        return String::new();
-    }
-
-    format!("{}{}", &content[..truncate_at], TRUNCATION_NOTICE)
+    truncate_to_tokens(content, max_tokens, TRUNCATION_NOTICE)
 }

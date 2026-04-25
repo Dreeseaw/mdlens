@@ -4,7 +4,7 @@ use std::collections::{HashMap, HashSet};
 use crate::model::Section;
 use crate::parse::{load_markdown, ParsedMarkdown};
 use crate::search::search_files;
-use crate::tokens::estimate_tokens;
+use crate::tokens::{estimate_tokens, truncate_to_tokens};
 
 const SECTION_SEPARATOR: &str = "\n\n";
 const TRUNCATION_NOTICE: &str = "\n\n<!-- mdlens: truncated at token budget -->";
@@ -291,36 +291,6 @@ fn build_pack_result(
     })
 }
 
-/// Truncate text to fit within a token budget and reserve room for the notice.
 fn truncate_segment_to_tokens(text: &str, max_tokens: usize) -> String {
-    if max_tokens == 0 {
-        return String::new();
-    }
-
-    if estimate_tokens(text) <= max_tokens {
-        return text.to_string();
-    }
-
-    let notice_tokens = estimate_tokens(TRUNCATION_NOTICE);
-    if max_tokens <= notice_tokens {
-        return String::new();
-    }
-
-    let target_chars = (max_tokens - notice_tokens) * 4;
-    let mut char_count = 0usize;
-    let mut truncate_at = 0usize;
-
-    for (idx, ch) in text.char_indices() {
-        char_count += 1;
-        if char_count > target_chars {
-            break;
-        }
-        truncate_at = idx + ch.len_utf8();
-    }
-
-    if truncate_at == 0 {
-        return String::new();
-    }
-
-    format!("{}{}", &text[..truncate_at], TRUNCATION_NOTICE)
+    truncate_to_tokens(text, max_tokens, TRUNCATION_NOTICE)
 }

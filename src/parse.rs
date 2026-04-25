@@ -79,11 +79,6 @@ fn build_line_index(content: &str) -> LineIndex {
         offset += chunk.len();
     }
 
-    if lines.is_empty() && !content.is_empty() {
-        line_starts.push(0);
-        lines.push(content.strip_suffix('\r').unwrap_or(content).to_string());
-    }
-
     LineIndex {
         lines,
         line_starts,
