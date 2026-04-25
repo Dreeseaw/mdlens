@@ -98,3 +98,49 @@ fn search_json_is_stable_across_runs() {
 
     assert_eq!(first_output, second_output);
 }
+
+#[test]
+fn search_with_preview() {
+    let mut cmd = Command::cargo_bin("mdlens").unwrap();
+    cmd.arg("search")
+        .arg(format!("{}/simple.md", FIXTURES))
+        .arg("Overview")
+        .arg("--preview")
+        .arg("1");
+    cmd.assert()
+        .success()
+        .stdout(predicate::str::contains("This is the overview section"));
+}
+
+#[test]
+fn search_with_content_and_json() {
+    let mut cmd = Command::cargo_bin("mdlens").unwrap();
+    cmd.arg("search")
+        .arg(format!("{}/simple.md", FIXTURES))
+        .arg("Overview")
+        .arg("--content")
+        .arg("--json");
+    cmd.assert().success();
+
+    let output = cmd.output().unwrap();
+    let stdout = String::from_utf8(output.stdout).unwrap();
+    let json: serde_json::Value = serde_json::from_str(&stdout).unwrap();
+    let first = &json["results"][0];
+    assert!(first["body"].as_str().unwrap().contains("# Overview"));
+}
+
+#[test]
+fn search_with_canonical_filters_out_dated_docs() {
+    let mut cmd = Command::cargo_bin("mdlens").unwrap();
+    cmd.arg("search")
+        .arg("tests/fixtures")
+        .arg("Content")
+        .arg("--canonical")
+        .arg("--json");
+    cmd.assert().success();
+
+    let output = cmd.output().unwrap();
+    let stdout = String::from_utf8(output.stdout).unwrap();
+    let json: serde_json::Value = serde_json::from_str(&stdout).unwrap();
+    assert!(json["results"].is_array());
+}

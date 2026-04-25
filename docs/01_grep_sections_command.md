@@ -8,7 +8,7 @@
 
 ## Feature: `mdlens sections`
 
-Reads file paths from stdin (one per line, as output by `grep -rl`), parses only those files, maps match context to sections, returns structured section output.
+Reads either file paths from stdin (one per line, as output by `grep -rl`) or `rg -nH` line hits, then maps the input back to Markdown sections and returns structured section output.
 
 ### CLI
 
@@ -18,7 +18,10 @@ mdlens sections [OPTIONS]
 
 Options:
 - `--content` — Include full section body text (default: metadata only)
+- `--children` — Include descendant subsection text inside each parent body
+- `--max-depth N` — Limit section depth shown; in whole-file metadata/preview mode, defaults to `2`
 - `--max-tokens N` — Cap total output tokens (truncates last section if exceeded)
+- `--max-sections N` — Cap the number of selected sections after ranking
 - `--json` — Machine-readable output
 - `--heading-paths` — Include heading path (e.g. "SGOCR Champion > Candidate Quality")
 - `--lines` — Include original line numbers (start-end)
@@ -30,6 +33,12 @@ File paths from stdin, one per line:
 ```
 tasks/mm_bridge/docs/SGOCR_CHAMPION.md
 tasks/vlm_cleo/docs/CLEO_STATE.md
+```
+
+Or line hits from `rg -nH`, which lets `mdlens sections` return only the deepest matching sections:
+```
+tasks/mm_bridge/docs/SGOCR_CHAMPION.md:381:candidate_quality = 0.38 * ocr_confidence + ...
+tasks/vlm_cleo/docs/CLEO_STATE.md:212:operational_score = 0.35 * VQAv2_overall + ...
 ```
 
 ### Output (default, --content)
@@ -76,6 +85,12 @@ tasks/mm_bridge/docs/SGOCR_CHAMPION.md
 - If exceeded, skip remaining sections (don't partially truncate mid-section)
 - Print a warning to stderr: "Warning: 3 sections omitted, would exceed 4000 token limit"
 
+Default content behavior:
+
+- `--content` emits each section's direct body only
+- this avoids repeating the same descendant text under every parent heading
+- add `--children` only when you want full subtree content repeated under the parent
+
 ## Implementation
 
 1. **New command in `src/cli.rs`** — `Sections` struct with the options above
@@ -105,14 +120,14 @@ tasks/mm_bridge/docs/SGOCR_CHAMPION.md
 
 Add to SKILL.md:
 ```bash
-# Find sections matching a term (one command)
-grep -rl "term" docs/ | mdlens sections --content
+# Find the exact matching sections for a term
+rg -nH "term" docs/ | mdlens sections --content --max-sections 4 --max-files 5
 
 # Cap output to token budget
-grep -rl "term" docs/ | mdlens sections --content --max-tokens 4000
+rg -nH "term" docs/ | mdlens sections --content --max-sections 4 --max-tokens 4000 --max-files 5
 
 # JSON for programmatic use
-grep -rl "term" docs/ | mdlens sections --json
+rg -nH "term" docs/ | mdlens sections --max-sections 8 --json
 ```
 
 ## What NOT to do

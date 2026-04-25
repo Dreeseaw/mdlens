@@ -86,6 +86,7 @@ pub fn pack_by_search(
         options.use_regex,
         options.max_results,
         options.context_lines,
+        false,
     )?;
     let mut cache = HashMap::new();
     let mut included_sections: Vec<OwnedSectionRef> = Vec::new();
