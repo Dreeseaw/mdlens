@@ -184,5 +184,6 @@ pub fn discover_markdown_files(root: &str) -> Result<Vec<String>> {
         }
     }
 
+    files.sort();
     Ok(files)
 }

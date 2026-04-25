@@ -60,13 +60,13 @@ struct ReadArgs {
     /// File to read from
     file: String,
     /// Section ID to extract
-    #[arg(long)]
+    #[arg(long, conflicts_with_all = ["heading_path", "lines"])]
     id: Option<String>,
     /// Heading path to extract (e.g., "Usage > Config")
-    #[arg(long)]
+    #[arg(long, conflicts_with_all = ["id", "lines"])]
     heading_path: Option<String>,
     /// Line range to extract (e.g., "120:190")
-    #[arg(long)]
+    #[arg(long, conflicts_with_all = ["id", "heading_path"])]
     lines: Option<String>,
     /// Include parent headings above the section excerpt
     #[arg(long)]
@@ -113,13 +113,13 @@ struct PackArgs {
     /// File or directory to pack from
     path: String,
     /// Comma-separated section IDs
-    #[arg(long)]
+    #[arg(long, conflicts_with_all = ["paths", "search"])]
     ids: Option<String>,
     /// Semicolon-separated heading paths
-    #[arg(long)]
+    #[arg(long, conflicts_with_all = ["ids", "search"])]
     paths: Option<String>,
     /// Search query to find sections to pack
-    #[arg(long)]
+    #[arg(long, conflicts_with_all = ["ids", "paths"])]
     search: Option<String>,
     /// Required: maximum token budget
     #[arg(long)]
@@ -128,7 +128,7 @@ struct PackArgs {
     #[arg(long)]
     parents: bool,
     /// Avoid duplicate nested sections (default: true)
-    #[arg(long, conflicts_with = "no_dedupe")]
+    #[arg(long, conflicts_with = "no_dedupe", default_value_t = true)]
     dedupe: bool,
     /// Allow duplicate sections in the final pack
     #[arg(long, conflicts_with = "dedupe")]
@@ -258,76 +258,82 @@ fn cmd_read(args: ReadArgs) -> Result<()> {
     let lines = &parsed.lines;
     let include_children = !args.no_children || args.children;
 
-    let (section_text, section_meta, selector_type, selector_value, section_ref) = if let Some(ref id) = args.id
-    {
-        let section = doc
-            .find_section_by_id(id)
-            .ok_or_else(|| anyhow::anyhow!("section id not found: {id}"))?;
-        let content = if include_children {
-            section.extract_content(lines)
+    let (section_text, section_meta, selector_type, selector_value, section_ref) =
+        if let Some(ref id) = args.id {
+            let section = doc
+                .find_section_by_id(id)
+                .ok_or_else(|| anyhow::anyhow!("section id not found: {id}"))?;
+            let content = if include_children {
+                section.extract_content(lines)
+            } else {
+                section.extract_direct_content(lines)
+            }
+            .join("\n");
+            (
+                content,
+                SectionMeta::from(section),
+                "id",
+                id.clone(),
+                Some(section),
+            )
+        } else if let Some(ref path_str) = args.heading_path {
+            let section = find_unique_section_by_path(doc, path_str)?;
+            let content = if include_children {
+                section.extract_content(lines)
+            } else {
+                section.extract_direct_content(lines)
+            }
+            .join("\n");
+            (
+                content,
+                SectionMeta::from(section),
+                "path",
+                path_str.clone(),
+                Some(section),
+            )
+        } else if let Some(ref lines_str) = args.lines {
+            let parts: Vec<&str> = lines_str.split(':').collect();
+            if parts.len() != 2 {
+                return Err(anyhow::anyhow!(
+                    "invalid line range: {}; expected format START:END",
+                    lines_str
+                ));
+            }
+            let start: usize = parts[0].trim().parse()?;
+            let end: usize = parts[1].trim().parse()?;
+            if start > end {
+                return Err(errors::invalid_line_range(start, end));
+            }
+            if start < 1 || end > lines.len() {
+                return Err(anyhow::anyhow!(
+                    "line range {}:{} out of bounds (file has {} lines)",
+                    start,
+                    end,
+                    lines.len()
+                ));
+            }
+            let content = lines[(start - 1)..end].join("\n");
+            let token_est = estimate_tokens(&content);
+            (
+                content,
+                SectionMeta {
+                    id: format!("lines:{}:{}", start, end),
+                    title: format!("Lines {}-{}", start, end),
+                    level: 0,
+                    path: vec![format!("Lines {}-{}", start, end)],
+                    line_start: start,
+                    line_end: end,
+                    token_estimate: token_est,
+                },
+                "lines",
+                format!("{}:{}", start, end),
+                None,
+            )
         } else {
-            section.extract_direct_content(lines)
-        }
-        .join("\n");
-        (content, SectionMeta::from(section), "id", id.clone(), Some(section))
-    } else if let Some(ref path_str) = args.heading_path {
-        let section = find_unique_section_by_path(doc, path_str)?;
-        let content = if include_children {
-            section.extract_content(lines)
-        } else {
-            section.extract_direct_content(lines)
-        }
-        .join("\n");
-        (
-            content,
-            SectionMeta::from(section),
-            "path",
-            path_str.clone(),
-            Some(section),
-        )
-    } else if let Some(ref lines_str) = args.lines {
-        let parts: Vec<&str> = lines_str.split(':').collect();
-        if parts.len() != 2 {
             return Err(anyhow::anyhow!(
-                "invalid line range: {}; expected format START:END",
-                lines_str
+                "exactly one of --id, --heading-path, or --lines is required"
             ));
-        }
-        let start: usize = parts[0].trim().parse()?;
-        let end: usize = parts[1].trim().parse()?;
-        if start > end {
-            return Err(errors::invalid_line_range(start, end));
-        }
-        if start < 1 || end > lines.len() {
-            return Err(anyhow::anyhow!(
-                "line range {}:{} out of bounds (file has {} lines)",
-                start,
-                end,
-                lines.len()
-            ));
-        }
-        let content = lines[(start - 1)..end].join("\n");
-        let token_est = estimate_tokens(&content);
-        (
-            content,
-            SectionMeta {
-                id: format!("lines:{}:{}", start, end),
-                title: format!("Lines {}-{}", start, end),
-                level: 0,
-                path: vec![format!("Lines {}-{}", start, end)],
-                line_start: start,
-                line_end: end,
-                token_estimate: token_est,
-            },
-            "lines",
-            format!("{}:{}", start, end),
-            None,
-        )
-    } else {
-        return Err(anyhow::anyhow!(
-            "exactly one of --id, --heading-path, or --lines is required"
-        ));
-    };
+        };
 
     let mut full_content = String::new();
 
@@ -429,10 +435,7 @@ impl From<&Section> for SectionMeta {
 }
 
 /// Find parent heading line numbers for a section.
-fn find_parent_headings(
-    doc: &crate::model::Document,
-    section: &Section,
-) -> Vec<usize> {
+fn find_parent_headings(doc: &crate::model::Document, section: &Section) -> Vec<usize> {
     let mut parent_map: std::collections::HashMap<String, Option<String>> =
         std::collections::HashMap::new();
     build_parent_map(&doc.sections, None, &mut parent_map);
@@ -552,7 +555,7 @@ fn cmd_search(args: SearchArgs) -> Result<()> {
 }
 
 fn cmd_pack(args: PackArgs) -> Result<()> {
-    let dedupe = !args.no_dedupe;
+    let dedupe = args.dedupe && !args.no_dedupe;
     let result = if let Some(ref ids_str) = args.ids {
         let ids: Vec<String> = ids_str.split(',').map(|s| s.trim().to_string()).collect();
         pack_by_ids(&args.path, &ids, args.max_tokens, args.parents, dedupe)?

@@ -65,6 +65,33 @@ fn read_by_path_with_literal_separator() {
 }
 
 #[test]
+fn read_by_path_rejects_ambiguous_match() {
+    let mut file = NamedTempFile::new().unwrap();
+    write!(file, "# A\n\nFirst.\n\n# A\n\nSecond.\n").unwrap();
+
+    let mut cmd = Command::cargo_bin("mdlens").unwrap();
+    cmd.arg("read")
+        .arg(file.path())
+        .arg("--heading-path")
+        .arg("A");
+    cmd.assert()
+        .failure()
+        .stderr(predicate::str::contains("path matched multiple sections"));
+}
+
+#[test]
+fn read_rejects_multiple_selectors() {
+    let mut cmd = Command::cargo_bin("mdlens").unwrap();
+    cmd.arg("read")
+        .arg(format!("{}/simple.md", FIXTURES))
+        .arg("--id")
+        .arg("1")
+        .arg("--lines")
+        .arg("1:2");
+    cmd.assert().failure();
+}
+
+#[test]
 fn read_by_lines() {
     let mut cmd = Command::cargo_bin("mdlens").unwrap();
     cmd.arg("read")

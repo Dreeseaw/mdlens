@@ -1,5 +1,7 @@
 use assert_cmd::Command;
 use predicates::prelude::*;
+use std::io::Write;
+use tempfile::NamedTempFile;
 
 const FIXTURES: &str = "tests/fixtures";
 
@@ -46,7 +48,7 @@ fn pack_with_truncation() {
         .arg("--ids")
         .arg("1")
         .arg("--max-tokens")
-        .arg("3")
+        .arg("15")
         .arg("--json");
     cmd.assert().success();
 
@@ -54,6 +56,7 @@ fn pack_with_truncation() {
     let stdout = String::from_utf8(output.stdout).unwrap();
     let json: serde_json::Value = serde_json::from_str(&stdout).unwrap();
     assert_eq!(json["truncated"], true);
+    assert_eq!(json["included"][0]["truncated"], true);
 }
 
 #[test]
@@ -122,6 +125,37 @@ fn pack_no_dedupe_keeps_duplicate_ids() {
     assert_eq!(included.len(), 2);
     assert_eq!(included[0]["section_id"], "1.1");
     assert_eq!(included[1]["section_id"], "1.1");
+}
+
+#[test]
+fn pack_by_path_rejects_ambiguous_match() {
+    let mut file = NamedTempFile::new().unwrap();
+    write!(file, "# A\n\nFirst.\n\n# A\n\nSecond.\n").unwrap();
+
+    let mut cmd = Command::cargo_bin("mdlens").unwrap();
+    cmd.arg("pack")
+        .arg(file.path())
+        .arg("--paths")
+        .arg("A")
+        .arg("--max-tokens")
+        .arg("5000");
+    cmd.assert()
+        .failure()
+        .stderr(predicate::str::contains("path matched multiple sections"));
+}
+
+#[test]
+fn pack_rejects_multiple_selectors() {
+    let mut cmd = Command::cargo_bin("mdlens").unwrap();
+    cmd.arg("pack")
+        .arg(format!("{}/simple.md", FIXTURES))
+        .arg("--ids")
+        .arg("1")
+        .arg("--search")
+        .arg("Overview")
+        .arg("--max-tokens")
+        .arg("5000");
+    cmd.assert().failure();
 }
 
 #[test]

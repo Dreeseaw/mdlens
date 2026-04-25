@@ -263,6 +263,15 @@ fn build_pack_result(
                 if !truncated_segment.is_empty() {
                     total_tokens += estimate_tokens(&truncated_segment);
                     content.push_str(&truncated_segment);
+                    included.push(PackIncludedSection {
+                        path: section_ref.path.clone(),
+                        section_id: section.id.clone(),
+                        section_path: section.path.clone(),
+                        line_start: section.line_start,
+                        line_end: section.line_end,
+                        token_estimate: estimate_tokens(&section_text),
+                        truncated: true,
+                    });
                 }
             }
             truncated = true;

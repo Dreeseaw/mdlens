@@ -45,14 +45,10 @@ fn render_section(out: &mut String, section: &Section, depth: usize, max_depth: 
 /// Render a section read output for human consumption.
 pub fn render_read(section: &Section, content: &str, truncated: bool) -> String {
     let mut out = String::new();
+    out.push_str(&format!("{}\n", section.path.join(" > ")));
     out.push_str(&format!(
-        "{} > {}\n",
-        section.path.join(" > "),
-        section.title
-    ));
-    out.push_str(&format!(
-        "id={}  lines={}  tokens\u{2248}{}\n\n",
-        section.id, section.line_start, section.token_estimate
+        "id={}  lines={}-{}  tokens\u{2248}{}\n\n",
+        section.id, section.line_start, section.line_end, section.token_estimate
     ));
     out.push_str(content);
     if truncated && !content.contains("<!-- mdlens: truncated at token budget -->") {

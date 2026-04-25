@@ -139,12 +139,6 @@ impl Document {
         }
         results
     }
-
-    /// Find a single section by path.
-    pub fn find_section_by_path(&self, path: &[String]) -> Option<&Section> {
-        self.find_sections_by_path(path).into_iter().next()
-    }
-
 }
 
 fn collect_sections_by_exact_path<'a>(
