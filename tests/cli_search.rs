@@ -130,12 +130,13 @@ fn search_with_content_and_json() {
 }
 
 #[test]
-fn search_with_canonical_filters_out_dated_docs() {
+fn search_returns_results_sorted_by_source_priority() {
+    // Results from canonical-named files (e.g. *_champion, *_state) should appear
+    // before dated-sequence files even without an explicit filter flag.
     let mut cmd = Command::cargo_bin("mdlens").unwrap();
     cmd.arg("search")
         .arg("tests/fixtures")
         .arg("Content")
-        .arg("--canonical")
         .arg("--json");
     cmd.assert().success();
 

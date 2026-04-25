@@ -6,17 +6,15 @@ use std::cmp::Reverse;
 use std::collections::{HashMap, HashSet};
 use std::io::{self, BufRead};
 
-use std::path::Path;
-
 use crate::errors;
 use crate::model::Section;
 use crate::pack::{pack_by_ids, PackSearchOptions};
 use crate::parse::{load_markdown, parse_markdown};
 use crate::render::{
     render_pack, render_read, render_search, render_sections, render_stats, render_tree,
-    PackIncluded, SectionsEntry, StatsEntry,
+    FileSectionsMap, PackIncluded, SectionsEntry, StatsEntry,
 };
-use crate::search::search_files;
+use crate::search::{get_doc_section_summaries, search_files};
 use crate::tokens::{estimate_tokens, truncate_to_tokens};
 
 const TRUNCATION_NOTICE: &str = "\n\n<!-- mdlens: truncated at token budget -->";
@@ -126,9 +124,6 @@ struct SearchArgs {
     /// Cap total output tokens across included search results
     #[arg(long)]
     max_tokens: Option<usize>,
-    /// Restrict directory searches to canonical source-of-truth docs when available
-    #[arg(long)]
-    canonical: bool,
 }
 
 #[derive(clap::Args)]
@@ -593,14 +588,13 @@ fn build_parent_map(
 }
 
 fn cmd_search(args: SearchArgs) -> Result<()> {
-    let (mut results, files_searched) = search_files(
+    let mut results = search_files(
         &args.path,
         &args.query,
         args.case_sensitive,
         args.regex,
         args.max_results,
         args.context_lines,
-        args.canonical,
     )?;
 
     if args.content || args.preview.is_some() || args.max_tokens.is_some() {
@@ -663,27 +657,23 @@ fn cmd_search(args: SearchArgs) -> Result<()> {
         };
         println!("{}", serde_json::to_string_pretty(&output)?);
     } else {
-        if args.canonical && results.is_empty() {
-            let file_names: Vec<String> = files_searched
-                .iter()
-                .map(|p| {
-                    Path::new(p)
-                        .file_name()
-                        .and_then(|n| n.to_str())
-                        .unwrap_or(p)
-                        .to_string()
-                })
-                .collect();
-            println!(
-                "[no matches in {} canonical docs ({}); drop --canonical for a broader search]",
-                file_names.len(),
-                file_names.join(", ")
-            );
-        }
-        println!("{}", render_search(&results, args.content));
+        let file_sections = build_file_sections_map(&results);
+        println!("{}", render_search(&results, args.content, &file_sections));
     }
 
     Ok(())
+}
+
+fn build_file_sections_map(results: &[crate::render::SearchResult]) -> FileSectionsMap {
+    let unique_files: std::collections::HashSet<&str> =
+        results.iter().map(|r| r.path.as_str()).collect();
+    let mut map = FileSectionsMap::new();
+    for path in unique_files {
+        if let Ok(summaries) = get_doc_section_summaries(path) {
+            map.insert(path.to_string(), summaries);
+        }
+    }
+    map
 }
 
 fn cmd_pack(args: PackArgs) -> Result<()> {

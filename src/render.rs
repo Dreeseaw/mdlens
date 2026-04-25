@@ -1,4 +1,5 @@
 use crate::model::{Document, Section};
+use std::collections::{HashMap, HashSet};
 
 pub fn render_tree(doc: &Document, max_depth: Option<usize>, include_preamble: bool) -> String {
     let mut out = String::new();
@@ -82,12 +83,39 @@ pub struct SearchSnippet {
     pub text: String,
 }
 
-pub fn render_search(results: &[SearchResult], with_content: bool) -> String {
+/// Maps file path → (matched_section_ids, all_section_summaries [(id, title)])
+pub type FileSectionsMap = HashMap<String, Vec<(String, String)>>;
+
+pub fn render_search(
+    results: &[SearchResult],
+    with_content: bool,
+    file_sections: &FileSectionsMap,
+) -> String {
+    let matched_ids_by_file: HashMap<&str, HashSet<&str>> =
+        results.iter().fold(HashMap::new(), |mut acc, r| {
+            acc.entry(r.path.as_str()).or_default().insert(r.section_id.as_str());
+            acc
+        });
+
     let mut out = String::new();
+    let mut last_file: Option<&str> = None;
+    let mut shown_sidebars: HashSet<&str> = HashSet::new();
+
     for (i, result) in results.iter().enumerate() {
+        let file_changed = last_file != Some(result.path.as_str());
+
         if i > 0 {
             out.push('\n');
         }
+
+        // Show sidebar at the START of each file's first result (before content)
+        if file_changed {
+            if shown_sidebars.insert(result.path.as_str()) {
+                append_file_sidebar(&mut out, &result.path, file_sections, &matched_ids_by_file);
+            }
+        }
+        last_file = Some(result.path.as_str());
+
         out.push_str(&format!(
             "{} > {} [id={} l{}-{} ~{}t matches={}]\n",
             result.path,
@@ -122,7 +150,37 @@ pub fn render_search(results: &[SearchResult], with_content: bool) -> String {
             }
         }
     }
+
     out
+}
+
+fn append_file_sidebar(
+    out: &mut String,
+    file_path: &str,
+    file_sections: &FileSectionsMap,
+    matched_ids_by_file: &HashMap<&str, HashSet<&str>>,
+) {
+    let Some(all_sections) = file_sections.get(file_path) else { return };
+    let matched = matched_ids_by_file.get(file_path);
+    let others: Vec<String> = all_sections
+        .iter()
+        .filter(|(id, title)| {
+            title != "<preamble>"
+                && matched.map_or(true, |m| !m.contains(id.as_str()))
+        })
+        .map(|(id, title)| format!("§{} {}", id, title))
+        .take(8)
+        .collect();
+    if !others.is_empty() {
+        out.push_str(&format!(
+            "[{}: also — {}]\n",
+            std::path::Path::new(file_path)
+                .file_name()
+                .and_then(|n| n.to_str())
+                .unwrap_or(file_path),
+            others.join(" · ")
+        ));
+    }
 }
 
 pub struct StatsEntry {

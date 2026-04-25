@@ -79,14 +79,13 @@ pub fn pack_by_search(
     max_tokens: usize,
     options: PackSearchOptions,
 ) -> Result<PackResult> {
-    let (results, _) = search_files(
+    let results = search_files(
         root,
         query,
         options.case_sensitive,
         options.use_regex,
         options.max_results,
         options.context_lines,
-        false,
     )?;
     let mut cache = HashMap::new();
     let mut included_sections: Vec<OwnedSectionRef> = Vec::new();

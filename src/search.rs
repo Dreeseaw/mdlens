@@ -8,7 +8,7 @@ use crate::parse::load_markdown;
 use crate::render::{SearchResult, SearchSnippet};
 
 /// Search markdown files for a query and return section-level results.
-/// Returns (results, files_searched).
+/// Results are sorted with canonical/source-of-truth docs ranked first.
 pub fn search_files(
     root: &str,
     query: &str,
@@ -16,9 +16,8 @@ pub fn search_files(
     use_regex: bool,
     max_results: usize,
     context_lines: usize,
-    canonical_only: bool,
-) -> Result<(Vec<SearchResult>, Vec<String>)> {
-    let files = discover_markdown_files_with_mode(root, canonical_only)?;
+) -> Result<Vec<SearchResult>> {
+    let files = discover_markdown_files(root)?;
     let mut all_results: Vec<SearchResult> = Vec::new();
 
     for file_path in &files {
@@ -46,7 +45,7 @@ pub fn search_files(
             .then(lhs.section_id.cmp(&rhs.section_id))
     });
 
-    Ok((all_results.into_iter().take(max_results).collect(), files))
+    Ok(all_results.into_iter().take(max_results).collect())
 }
 
 /// Search within a single document.
@@ -259,6 +258,15 @@ fn section_priority(path: &[String]) -> i32 {
         "overview",
         "summary",
         "key",
+        // Synthesis / conclusion sections that often contain the decisive finding
+        "strategic read",
+        "interpretation",
+        "what this means",
+        "what we learned",
+        "conclusion",
+        "findings",
+        "key results",
+        "key finding",
     ] {
         if joined.contains(marker) {
             score += 12;
@@ -288,6 +296,29 @@ fn is_dated_doc(file_name: &str) -> bool {
         || file_name.contains("2025-")
         || file_name.contains("2024-")
         || file_name.contains("2023-")
+}
+
+/// Returns (id, title) summaries for direct subsections (depth=1) of each root section.
+/// Skips root sections (depth=0) since they just repeat the file name.
+pub fn get_doc_section_summaries(path: &str) -> Result<Vec<(String, String)>> {
+    let parsed = load_markdown(path)?;
+    let mut summaries = Vec::new();
+    for root in &parsed.doc.sections {
+        if root.title == "<preamble>" {
+            continue;
+        }
+        // Only collect direct children (depth=1), not nested subsections
+        for child in &root.children {
+            if child.title != "<preamble>" {
+                summaries.push((child.id.clone(), child.title.clone()));
+            }
+        }
+        // If there are no children, include the root section itself
+        if root.children.is_empty() {
+            summaries.push((root.id.clone(), root.title.clone()));
+        }
+    }
+    Ok(summaries)
 }
 
 /// Discover markdown files in a directory or return a single file.
