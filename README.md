@@ -53,8 +53,41 @@ All commands support `--json` for machine-readable output.
 
 ## Installation
 
+### Prerequisites
+
+Rust 1.70+ and Cargo. Install via [rustup](https://rustup.rs/):
+
 ```bash
+curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh
+```
+
+### Install from this repo
+
+```bash
+cd mdlens
 cargo install --path .
+```
+
+### Install directly from Git
+
+```bash
+cargo install --git https://github.com/cothogonal/core.git --subdirectory mdlens
+```
+
+### Build from source
+
+```bash
+git clone https://github.com/cothogonal/core.git
+cd core/mdlens
+cargo build --release
+# Binary at target/release/mdlens
+```
+
+### Verify
+
+```bash
+mdlens --version
+mdlens --help
 ```
 
 ## Benchmarks
