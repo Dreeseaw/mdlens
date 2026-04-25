@@ -1,97 +1,139 @@
 # mdlens
 
-Token-efficient Markdown structure CLI for AI agents. Navigate, search, and pack Markdown documentation into bounded context windows.
+[![CI](https://github.com/Dreeseaw/mdlens/actions/workflows/ci.yml/badge.svg)](https://github.com/Dreeseaw/mdlens/actions/workflows/ci.yml)
+[![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
+[![Crates.io](https://img.shields.io/crates/v/mdlens.svg)](https://crates.io/crates/mdlens)
+[![docs.rs](https://docs.rs/mdlens/badge.svg)](https://docs.rs/mdlens)
+
+Token-efficient Markdown CLI for AI agents. Navigate, search, and pack docs into bounded context windows without reading files you don't need.
+
+## Why
+
+When an AI agent needs to check a doc, the naive approach is to read the whole file. That works fine for a 50-line README. It falls apart fast with real documentation: multi-file references, long guides, rolling experiment logs. You burn context budget on sections that have nothing to do with the task at hand.
+
+`mdlens` gives agents a structured view of Markdown with section hierarchy, token estimates, and targeted extraction. Read only what matters.
+
+> **Token savings vs. raw `cat`:** *(benchmarks in progress, will update)*
+
+## Demo
+
+```
+$ mdlens tree docs/
+
+docs/guide.md  lines=312  tokens=1842
+
+1 Guide lines 1-312  tokens=1842
+  1.1 Installation lines 5-38  tokens=203
+    1.1.1 Prerequisites lines 7-18  tokens=64
+    1.1.2 Quick start lines 19-38  tokens=98
+  1.2 Configuration lines 39-110  tokens=487
+    1.2.1 Environment variables lines 42-78  tokens=201
+    1.2.2 Config file lines 79-110  tokens=186
+  1.3 API Reference lines 111-280  tokens=982
+  1.4 Changelog lines 281-312  tokens=187
+```
+
+```
+$ mdlens read docs/guide.md --id 1.1.2
+
+Guide > Installation > Quick start
+id=1.1.2  lines=19-38  tokens=98
+
+### Quick start
+...
+```
+
+```
+$ mdlens search docs/ "authentication"
+
+docs/guide.md > API Reference > Auth
+id=1.3.1  lines=115-142  tokens=163  matches=4
+
+115: ## Authentication
+...
+```
 
 ## Commands
 
-- **tree** — Show section hierarchy with token estimates
-- **read** — Extract a section by ID, heading path, or line range
-- **search** — Find sections matching a query across files
-- **pack** — Build a bounded context packet from selected sections
-- **stats** — Inspect file sizes and token estimates
+| Command | What it does |
+|---------|-------------|
+| `tree`  | Show section hierarchy with token estimates for a file or directory |
+| `read`  | Extract a section by ID, heading path, or line range |
+| `search`| Find sections matching a keyword or regex across files |
+| `pack`  | Bundle selected sections into a hard token budget |
+| `stats` | File-level sizes, word counts, and token estimates |
 
 ## Usage
 
 ```bash
-# Show section tree
+# Survey structure before reading anything
 mdlens tree docs/
 
-# Read a specific section
-mdlens read docs/guide.md --id 1.2
+# Read a specific section by dotted ID
+mdlens read docs/guide.md --id 1.2.1
 
 # Read by full heading path
-mdlens read docs/guide.md --heading-path "Setup>Configuration"
+mdlens read docs/guide.md --heading-path "Configuration>Environment variables"
 
-# Read only the section's direct body
-mdlens read docs/guide.md --id 1 --no-children
+# Body only, no subsections
+mdlens read docs/guide.md --id 1.2 --no-children
 
-# Search across files
-mdlens search docs/ "authentication" --json
+# Search across a directory
+mdlens search docs/ "rate limit"
 
-# Pack sections into token budget
+# Pack a few sections into a 4k token budget
 mdlens pack docs/guide.md --ids 1.1,1.2 --max-tokens 4000
 
-# Pack by search results
-mdlens pack docs/ --search "API reference" --max-tokens 8000 --parents
-
-# Pack by regex search and keep duplicate selections
-mdlens pack docs/ --search "API|Reference" --regex --no-dedupe --max-tokens 8000
+# Pack by search results, include parent headings for context
+mdlens pack docs/ --search "authentication" --max-tokens 8000 --parents
 ```
 
 ## Section IDs
 
-Sections are identified by dotted IDs reflecting hierarchy:
-- `1` — first H1 heading
-- `1.1` — first child of section 1
-- `1.2.3` — third child of section 1.2
+Dotted IDs reflect heading hierarchy:
 
-Heading paths are exact section paths from the document root. Escape literal `>` characters inside a title as `\>`.
+```
+1        = first H1
+1.2      = second child of section 1
+1.2.3    = third child of 1.2
+```
 
-## JSON Output
+Heading paths use `>` as a separator: `"Configuration>Environment variables"`. Escape a literal `>` as `\>`.
 
-All commands support `--json` for machine-readable output.
+## JSON output
+
+All commands support `--json` for stable machine-readable output with a `schema_version` field.
+
+```bash
+mdlens tree docs/ --json
+mdlens search docs/ "config" --json
+```
+
+## Claude Code plugin
+
+`mdlens` ships as a Claude Code plugin. Install it and Claude will automatically use `mdlens` instead of reading `.md` files raw.
+
+```
+/plugin install mdlens
+```
 
 ## Installation
 
-### Prerequisites
-
-Rust 1.70+ and Cargo. Install via [rustup](https://rustup.rs/):
+Requires Rust 1.70+. Install [rustup](https://rustup.rs/) if you don't have it.
 
 ```bash
-curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh
+# From crates.io (once published)
+cargo install mdlens
+
+# Directly from this repo
+cargo install --git https://github.com/Dreeseaw/mdlens
+
+# Build from source
+git clone https://github.com/Dreeseaw/mdlens
+cd mdlens && cargo build --release
+# binary at target/release/mdlens
 ```
 
-### Install from this repo
+## License
 
-```bash
-cd mdlens
-cargo install --path .
-```
-
-### Install directly from Git
-
-```bash
-cargo install --git https://github.com/cothogonal/core.git --subdirectory mdlens
-```
-
-### Build from source
-
-```bash
-git clone https://github.com/cothogonal/core.git
-cd core/mdlens
-cargo build --release
-# Binary at target/release/mdlens
-```
-
-### Verify
-
-```bash
-mdlens --version
-mdlens --help
-```
-
-## Benchmarks
-
-```bash
-cargo bench
-```
+MIT. See [LICENSE](LICENSE).
