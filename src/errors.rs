@@ -2,7 +2,10 @@ use anyhow::anyhow;
 
 /// Error for section ID not found.
 pub fn section_not_found(id: &str, nearby: &[&crate::model::Section]) -> anyhow::Error {
-    let mut msg = format!("error: section id not found: {}\n\nAvailable nearby sections:\n", id);
+    let mut msg = format!(
+        "error: section id not found: {}\n\nAvailable nearby sections:\n",
+        id
+    );
     for s in nearby {
         msg.push_str(&format!("  {} {}\n", s.id, s.title));
     }
@@ -11,7 +14,10 @@ pub fn section_not_found(id: &str, nearby: &[&crate::model::Section]) -> anyhow:
 
 /// Error for ambiguous path match.
 pub fn ambiguous_path(path: &str, candidates: &[&crate::model::Section]) -> anyhow::Error {
-    let mut msg = format!("error: path matched multiple sections: {}\n\nCandidates:\n", path);
+    let mut msg = format!(
+        "error: path matched multiple sections: {}\n\nCandidates:\n",
+        path
+    );
     for s in candidates {
         msg.push_str(&format!("  {} {}\n", s.id, s.path.join(" > ")));
     }

@@ -19,12 +19,7 @@ pub fn render_tree(doc: &Document, max_depth: Option<usize>, include_preamble: b
     out
 }
 
-fn render_section(
-    out: &mut String,
-    section: &Section,
-    depth: usize,
-    max_depth: Option<usize>,
-) {
+fn render_section(out: &mut String, section: &Section, depth: usize, max_depth: Option<usize>) {
     if let Some(max) = max_depth {
         if depth >= max {
             return;
@@ -57,12 +52,10 @@ pub fn render_read(section: &Section, content: &str, truncated: bool) -> String 
     ));
     out.push_str(&format!(
         "id={}  lines={}  tokens\u{2248}{}\n\n",
-        section.id,
-        section.line_start,
-        section.token_estimate
+        section.id, section.line_start, section.token_estimate
     ));
     out.push_str(content);
-    if truncated {
+    if truncated && !content.contains("<!-- mdlens: truncated at token budget -->") {
         out.push_str("\n\n<!-- mdlens: truncated at token budget -->\n");
     }
     out
@@ -94,19 +87,17 @@ pub fn render_search(results: &[SearchResult]) -> String {
             out.push_str("\n---\n\n");
         }
         out.push_str(&format!(
-            "{} > {}\nid={}  lines={}  tokens\u{2248}{}  matches={}\n\n",
+            "{} > {}\nid={}  lines={}-{}  tokens\u{2248}{}  matches={}\n\n",
             result.path,
             result.section_path.join(" > "),
             result.section_id,
-            format!("{}-{}", result.line_start, result.line_end),
+            result.line_start,
+            result.line_end,
             result.token_estimate,
             result.match_count,
         ));
         for snippet in &result.snippets {
-            out.push_str(&format!(
-                "{}:{}\n",
-                snippet.line_start, snippet.text
-            ));
+            out.push_str(&format!("{}:{}\n", snippet.line_start, snippet.text));
         }
     }
     out
@@ -115,7 +106,10 @@ pub fn render_search(results: &[SearchResult]) -> String {
 /// Render stats table for human consumption.
 pub fn render_stats(entries: &[StatsEntry]) -> String {
     let mut out = String::new();
-    out.push_str(&format!("{:<30} {:>8} {:>8} {:>8}\n", "path", "lines", "words", "tokens\u{2248}"));
+    out.push_str(&format!(
+        "{:<30} {:>8} {:>8} {:>8}\n",
+        "path", "lines", "words", "tokens\u{2248}"
+    ));
 
     for entry in entries {
         out.push_str(&format!(

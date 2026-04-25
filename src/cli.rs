@@ -1,13 +1,19 @@
 use anyhow::Result;
-use clap::{Parser, Subcommand};
+use clap::{Parser, Subcommand, ValueEnum};
 use serde::Serialize;
+use std::cmp::Reverse;
 
+use crate::errors;
 use crate::model::Section;
-use crate::pack::pack_by_ids;
-use crate::parse::parse_markdown;
-use crate::render::{render_pack, render_read, render_search, render_stats, render_tree, PackIncluded, StatsEntry};
+use crate::pack::{pack_by_ids, PackSearchOptions};
+use crate::parse::{load_markdown, parse_markdown};
+use crate::render::{
+    render_pack, render_read, render_search, render_stats, render_tree, PackIncluded, StatsEntry,
+};
 use crate::search::search_files;
 use crate::tokens::estimate_tokens;
+
+const TRUNCATION_NOTICE: &str = "\n\n<!-- mdlens: truncated at token budget -->";
 
 #[derive(Parser)]
 #[command(name = "mdlens")]
@@ -66,10 +72,10 @@ struct ReadArgs {
     #[arg(long)]
     parents: bool,
     /// Include all child sections
-    #[arg(long, default_value = "true")]
+    #[arg(long, conflicts_with = "no_children")]
     children: bool,
     /// Only include heading and direct body before first child heading
-    #[arg(long)]
+    #[arg(long, conflicts_with = "children")]
     no_children: bool,
     /// Truncate output to approximate token budget
     #[arg(long)]
@@ -122,11 +128,33 @@ struct PackArgs {
     #[arg(long)]
     parents: bool,
     /// Avoid duplicate nested sections (default: true)
-    #[arg(long, default_value_t = true)]
+    #[arg(long, conflicts_with = "no_dedupe")]
     dedupe: bool,
+    /// Allow duplicate sections in the final pack
+    #[arg(long, conflicts_with = "dedupe")]
+    no_dedupe: bool,
+    /// Use regex when selecting sections via --search
+    #[arg(long)]
+    regex: bool,
+    /// Case-sensitive search when selecting sections via --search
+    #[arg(long)]
+    case_sensitive: bool,
+    /// Maximum number of search results to consider for --search
+    #[arg(long, default_value_t = 20)]
+    max_results: usize,
+    /// Context lines when searching via --search
+    #[arg(long, default_value_t = 2)]
+    context_lines: usize,
     /// Output JSON
     #[arg(long)]
     json: bool,
+}
+
+#[derive(Clone, ValueEnum)]
+enum StatsSort {
+    Path,
+    Tokens,
+    Lines,
 }
 
 #[derive(clap::Args)]
@@ -137,8 +165,8 @@ struct StatsArgs {
     #[arg(long)]
     json: bool,
     /// Sort by field
-    #[arg(long, default_value = "path")]
-    sort: String,
+    #[arg(long, value_enum, default_value_t = StatsSort::Path)]
+    sort: StatsSort,
     /// Show top N results
     #[arg(long)]
     top: Option<usize>,
@@ -170,11 +198,19 @@ fn cmd_tree(args: TreeArgs) -> Result<()> {
                 char_count: doc.char_count,
                 word_count: doc.word_count,
                 token_estimate: doc.token_estimate,
-                sections: serialize_sections(&doc.sections, args.max_depth, args.include_preamble, 0),
+                sections: serialize_sections(
+                    &doc.sections,
+                    args.max_depth,
+                    args.include_preamble,
+                    0,
+                ),
             };
             println!("{}", serde_json::to_string_pretty(&output)?);
         } else {
-            println!("{}", render_tree(&doc, args.max_depth, args.include_preamble));
+            println!(
+                "{}",
+                render_tree(&doc, args.max_depth, args.include_preamble)
+            );
         }
     } else {
         // Multiple files
@@ -189,7 +225,12 @@ fn cmd_tree(args: TreeArgs) -> Result<()> {
                     char_count: doc.char_count,
                     word_count: doc.word_count,
                     token_estimate: doc.token_estimate,
-                    sections: serialize_sections(&doc.sections, args.max_depth, args.include_preamble, 0),
+                    sections: serialize_sections(
+                        &doc.sections,
+                        args.max_depth,
+                        args.include_preamble,
+                        0,
+                    ),
                 });
             }
             let output = TreeMultiJsonOutput {
@@ -200,7 +241,10 @@ fn cmd_tree(args: TreeArgs) -> Result<()> {
         } else {
             for file in &files {
                 let doc = parse_markdown(file)?;
-                println!("\n{}", render_tree(&doc, args.max_depth.or(Some(2)), args.include_preamble));
+                println!(
+                    "\n{}",
+                    render_tree(&doc, args.max_depth, args.include_preamble)
+                );
             }
         }
     }
@@ -209,100 +253,99 @@ fn cmd_tree(args: TreeArgs) -> Result<()> {
 }
 
 fn cmd_read(args: ReadArgs) -> Result<()> {
-    let doc = parse_markdown(&args.file)?;
-    let lines: Vec<String> = std::fs::read_to_string(&args.file)?
-        .lines()
-        .map(|l| l.to_string())
-        .collect();
+    let parsed = load_markdown(&args.file)?;
+    let doc = &parsed.doc;
+    let lines = &parsed.lines;
+    let include_children = !args.no_children || args.children;
 
-    // Determine which section to read
-    let (section_text, section_meta, selector_type, selector_value) =
-        if let Some(ref id) = args.id {
-            let section = doc
-                .find_section_by_id(id)
-                .ok_or_else(|| anyhow::anyhow!("section id not found: {}", id))?;
-            let content = section.extract_content(&lines).join("\n");
-            (
-                content,
-                SectionMeta::from(section),
-                "id",
-                id.clone(),
-            )
-        } else if let Some(ref path_str) = args.heading_path {
-            let path_parts: Vec<String> = path_str.split('>').map(|s| s.trim().to_string()).collect();
-            let section = doc
-                .find_section_by_path(&path_parts)
-                .ok_or_else(|| anyhow::anyhow!("path not found: {}", path_str))?;
-            let content = section.extract_content(&lines).join("\n");
-            (
-                content,
-                SectionMeta::from(section),
-                "path",
-                path_str.clone(),
-            )
-        } else if let Some(ref lines_str) = args.lines {
-            let parts: Vec<&str> = lines_str.split(':').collect();
-            if parts.len() != 2 {
-                return Err(anyhow::anyhow!(
-                    "invalid line range: {}; expected format START:END",
-                    lines_str
-                ));
-            }
-            let start: usize = parts[0].trim().parse()?;
-            let end: usize = parts[1].trim().parse()?;
-            if start > end {
-                return Err(anyhow::anyhow!(
-                    "invalid line range: {}: {}; start must be <= end",
-                    start, end
-                ));
-            }
-            if start < 1 || end > lines.len() {
-                return Err(anyhow::anyhow!(
-                    "line range {}:{} out of bounds (file has {} lines)",
-                    start, end, lines.len()
-                ));
-            }
-            let content = lines[(start - 1)..end].join("\n");
-            let token_est = estimate_tokens(&content);
-            (
-                content,
-                SectionMeta {
-                    id: format!("lines:{}:{}", start, end),
-                    title: format!("Lines {}-{}", start, end),
-                    level: 0,
-                    path: vec![format!("Lines {}-{}", start, end)],
-                    line_start: start,
-                    line_end: end,
-                    token_estimate: token_est,
-                },
-                "lines",
-                format!("{}:{}", start, end),
-            )
+    let (section_text, section_meta, selector_type, selector_value) = if let Some(ref id) = args.id
+    {
+        let section = doc
+            .find_section_by_id(id)
+            .ok_or_else(|| anyhow::anyhow!("section id not found: {id}"))?;
+        let content = if include_children {
+            section.extract_content(lines)
         } else {
+            section.extract_direct_content(lines)
+        }
+        .join("\n");
+        (content, SectionMeta::from(section), "id", id.clone())
+    } else if let Some(ref path_str) = args.heading_path {
+        let section = find_unique_section_by_path(doc, path_str)?;
+        let content = if include_children {
+            section.extract_content(lines)
+        } else {
+            section.extract_direct_content(lines)
+        }
+        .join("\n");
+        (
+            content,
+            SectionMeta::from(section),
+            "path",
+            path_str.clone(),
+        )
+    } else if let Some(ref lines_str) = args.lines {
+        let parts: Vec<&str> = lines_str.split(':').collect();
+        if parts.len() != 2 {
             return Err(anyhow::anyhow!(
-                "exactly one of --id, --path, or --lines is required"
+                "invalid line range: {}; expected format START:END",
+                lines_str
             ));
-        };
+        }
+        let start: usize = parts[0].trim().parse()?;
+        let end: usize = parts[1].trim().parse()?;
+        if start > end {
+            return Err(errors::invalid_line_range(start, end));
+        }
+        if start < 1 || end > lines.len() {
+            return Err(anyhow::anyhow!(
+                "line range {}:{} out of bounds (file has {} lines)",
+                start,
+                end,
+                lines.len()
+            ));
+        }
+        let content = lines[(start - 1)..end].join("\n");
+        let token_est = estimate_tokens(&content);
+        (
+            content,
+            SectionMeta {
+                id: format!("lines:{}:{}", start, end),
+                title: format!("Lines {}-{}", start, end),
+                level: 0,
+                path: vec![format!("Lines {}-{}", start, end)],
+                line_start: start,
+                line_end: end,
+                token_estimate: token_est,
+            },
+            "lines",
+            format!("{}:{}", start, end),
+        )
+    } else {
+        return Err(anyhow::anyhow!(
+            "exactly one of --id, --heading-path, or --lines is required"
+        ));
+    };
 
-    // Build content with optional parent headings
     let mut full_content = String::new();
 
     if args.parents {
-        // Find parent headings and prepend them
-        let parents = find_parent_headings(&doc, &selector_type, &selector_value);
-        for line_idx in &parents {
-            full_content.push_str(&lines[*line_idx - 1]);
-            full_content.push('\n');
-            full_content.push('\n');
+        let parents = find_parent_headings(doc, selector_type, &selector_value);
+        for line_idx in parents {
+            if !full_content.is_empty() {
+                full_content.push_str("\n\n");
+            }
+            full_content.push_str(&lines[line_idx - 1]);
         }
     }
 
+    if !full_content.is_empty() && !section_text.is_empty() {
+        full_content.push_str("\n\n");
+    }
     full_content.push_str(&section_text);
 
-    // Apply token truncation if requested
     let truncated = if let Some(max_tokens) = args.max_tokens {
-        let current_tokens = estimate_tokens(&full_content);
-        if current_tokens > max_tokens {
+        if estimate_tokens(&full_content) > max_tokens {
             full_content = truncate_content_to_tokens(&full_content, max_tokens);
             true
         } else {
@@ -335,7 +378,6 @@ fn cmd_read(args: ReadArgs) -> Result<()> {
         };
         println!("{}", serde_json::to_string_pretty(&output)?);
     } else {
-        // For human output, create a temporary Section for rendering
         let section = Section {
             id: section_meta.id.clone(),
             slug: Section::slugify(&section_meta.title),
@@ -368,8 +410,8 @@ struct SectionMeta {
     token_estimate: usize,
 }
 
-impl<'a> From<&'a Section> for SectionMeta {
-    fn from(s: &'a Section) -> Self {
+impl From<&Section> for SectionMeta {
+    fn from(s: &Section) -> Self {
         SectionMeta {
             id: s.id.clone(),
             title: s.title.clone(),
@@ -383,20 +425,21 @@ impl<'a> From<&'a Section> for SectionMeta {
 }
 
 /// Find parent heading line numbers for a section.
-fn find_parent_headings<'a>(
-    doc: &'a crate::model::Document,
+fn find_parent_headings(
+    doc: &crate::model::Document,
     selector_type: &str,
     selector_value: &str,
 ) -> Vec<usize> {
     let section = if selector_type == "id" {
         doc.find_section_by_id(selector_value)
     } else {
-        let parts: Vec<String> = selector_value.split('>').map(|s| s.trim().to_string()).collect();
+        let parts = parse_heading_path(selector_value);
         doc.find_section_by_path(&parts)
     };
 
     if let Some(sec) = section {
-        let mut parent_map: std::collections::HashMap<String, Option<String>> = std::collections::HashMap::new();
+        let mut parent_map: std::collections::HashMap<String, Option<String>> =
+            std::collections::HashMap::new();
         build_parent_map(&doc.sections, None, &mut parent_map);
         let mut chain = Vec::new();
         let mut current_id = sec.id.clone();
@@ -411,6 +454,52 @@ fn find_parent_headings<'a>(
     } else {
         Vec::new()
     }
+}
+
+fn find_unique_section_by_path<'a>(
+    doc: &'a crate::model::Document,
+    path_str: &str,
+) -> Result<&'a Section> {
+    let path = parse_heading_path(path_str);
+    let matches = doc.find_sections_by_path(&path);
+    match matches.len() {
+        0 => Err(anyhow::anyhow!("path not found: {path_str}")),
+        1 => Ok(matches[0]),
+        _ => Err(errors::ambiguous_path(path_str, &matches)),
+    }
+}
+
+fn parse_heading_path(path: &str) -> Vec<String> {
+    let mut parts = Vec::new();
+    let mut current = String::new();
+    let mut escaped = false;
+
+    for ch in path.chars() {
+        if escaped {
+            current.push(ch);
+            escaped = false;
+            continue;
+        }
+
+        match ch {
+            '\\' => escaped = true,
+            '>' => {
+                let part = current.trim();
+                if !part.is_empty() {
+                    parts.push(part.to_string());
+                }
+                current.clear();
+            }
+            _ => current.push(ch),
+        }
+    }
+
+    let part = current.trim();
+    if !part.is_empty() {
+        parts.push(part.to_string());
+    }
+
+    parts
 }
 
 fn build_parent_map(
@@ -471,24 +560,32 @@ fn cmd_search(args: SearchArgs) -> Result<()> {
 }
 
 fn cmd_pack(args: PackArgs) -> Result<()> {
+    let dedupe = !args.no_dedupe || args.dedupe;
     let result = if let Some(ref ids_str) = args.ids {
         let ids: Vec<String> = ids_str.split(',').map(|s| s.trim().to_string()).collect();
-        pack_by_ids(&args.path, &ids, args.max_tokens, args.parents)?
+        pack_by_ids(&args.path, &ids, args.max_tokens, args.parents, dedupe)?
     } else if let Some(ref paths_str) = args.paths {
         let doc = parse_markdown(&args.path)?;
         let path_list: Vec<&str> = paths_str.split(';').collect();
         let mut ids = Vec::new();
         for p in path_list {
-            let parts: Vec<String> = p.split('>').map(|s| s.trim().to_string()).collect();
-            if let Some(section) = doc.find_section_by_path(&parts) {
-                ids.push(section.id.clone());
-            } else {
-                return Err(anyhow::anyhow!("path not found: {}", p));
-            }
+            ids.push(find_unique_section_by_path(&doc, p)?.id.clone());
         }
-        pack_by_ids(&args.path, &ids, args.max_tokens, args.parents)?
+        pack_by_ids(&args.path, &ids, args.max_tokens, args.parents, dedupe)?
     } else if let Some(ref query) = args.search {
-        crate::pack::pack_by_search(&args.path, query, args.max_tokens, args.parents)?
+        crate::pack::pack_by_search(
+            &args.path,
+            query,
+            args.max_tokens,
+            PackSearchOptions {
+                include_parents: args.parents,
+                dedupe,
+                case_sensitive: args.case_sensitive,
+                use_regex: args.regex,
+                max_results: args.max_results,
+                context_lines: args.context_lines,
+            },
+        )?
     } else {
         return Err(anyhow::anyhow!(
             "exactly one of --ids, --paths, or --search is required"
@@ -558,10 +655,10 @@ fn cmd_stats(args: StatsArgs) -> Result<()> {
     }
 
     // Sort
-    match args.sort.as_str() {
-        "tokens" => entries.sort_by(|a, b| b.tokens.cmp(&a.tokens)),
-        "lines" => entries.sort_by(|a, b| b.lines.cmp(&a.lines)),
-        _ => entries.sort_by(|a, b| a.path.cmp(&b.path)),
+    match args.sort {
+        StatsSort::Tokens => entries.sort_by_key(|entry| Reverse(entry.tokens)),
+        StatsSort::Lines => entries.sort_by_key(|entry| Reverse(entry.lines)),
+        StatsSort::Path => entries.sort_by(|lhs, rhs| lhs.path.cmp(&rhs.path)),
     }
 
     // Apply top limit
@@ -731,12 +828,22 @@ fn serialize_sections(
         }
         let children = if let Some(max) = max_depth {
             if current_depth + 1 < max {
-                serialize_sections(&section.children, max_depth, include_preamble, current_depth + 1)
+                serialize_sections(
+                    &section.children,
+                    max_depth,
+                    include_preamble,
+                    current_depth + 1,
+                )
             } else {
                 Vec::new()
             }
         } else {
-            serialize_sections(&section.children, max_depth, include_preamble, current_depth + 1)
+            serialize_sections(
+                &section.children,
+                max_depth,
+                include_preamble,
+                current_depth + 1,
+            )
         };
 
         result.push(SectionJsonOutput {
@@ -754,23 +861,29 @@ fn serialize_sections(
 }
 
 fn truncate_content_to_tokens(content: &str, max_tokens: usize) -> String {
-    let max_chars = max_tokens * 4;
-    if content.chars().count() <= max_chars {
+    if estimate_tokens(content) <= max_tokens {
         return content.to_string();
     }
 
-    let mut char_count = 0;
-    let mut truncate_at = 0;
-    for (idx, ch) in content.char_indices() {
-        char_count += 1;
-        if char_count >= max_chars {
-            truncate_at = idx + ch.len_utf8();
-            break;
-        }
+    let notice_tokens = estimate_tokens(TRUNCATION_NOTICE);
+    if max_tokens <= notice_tokens {
+        return String::new();
     }
 
-    format!(
-        "{}\n\n<!-- mdlens: truncated at token budget -->",
-        &content[..truncate_at]
-    )
+    let target_chars = (max_tokens - notice_tokens) * 4;
+    let mut char_count = 0usize;
+    let mut truncate_at = 0usize;
+    for (idx, ch) in content.char_indices() {
+        char_count += 1;
+        if char_count > target_chars {
+            break;
+        }
+        truncate_at = idx + ch.len_utf8();
+    }
+
+    if truncate_at == 0 {
+        return String::new();
+    }
+
+    format!("{}{}", &content[..truncate_at], TRUNCATION_NOTICE)
 }

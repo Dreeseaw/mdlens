@@ -13,10 +13,7 @@ fn search_plain_text() {
 #[test]
 fn search_json() {
     let mut cmd = Command::cargo_bin("mdlens").unwrap();
-    cmd.arg("search")
-        .arg(FIXTURES)
-        .arg("Results")
-        .arg("--json");
+    cmd.arg("search").arg(FIXTURES).arg("Results").arg("--json");
     cmd.assert().success();
 
     let output = cmd.output().unwrap();
@@ -77,4 +74,27 @@ fn search_max_results() {
         .arg("--max-results")
         .arg("2");
     cmd.assert().success();
+}
+
+#[test]
+fn search_json_is_stable_across_runs() {
+    let mut first = Command::cargo_bin("mdlens").unwrap();
+    first
+        .arg("search")
+        .arg(FIXTURES)
+        .arg("Content")
+        .arg("--json");
+    first.assert().success();
+    let first_output = String::from_utf8(first.output().unwrap().stdout).unwrap();
+
+    let mut second = Command::cargo_bin("mdlens").unwrap();
+    second
+        .arg("search")
+        .arg(FIXTURES)
+        .arg("Content")
+        .arg("--json");
+    second.assert().success();
+    let second_output = String::from_utf8(second.output().unwrap().stdout).unwrap();
+
+    assert_eq!(first_output, second_output);
 }

@@ -46,7 +46,7 @@ mod tests {
     fn test_estimate_tokens_basic() {
         // "Hello world" is 11 chars, ~3 tokens
         let tokens = estimate_tokens("Hello world");
-        assert!(tokens >= 2 && tokens <= 4);
+        assert!((2..=4).contains(&tokens));
     }
 
     #[test]

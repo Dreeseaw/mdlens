@@ -1,10 +1,13 @@
 use anyhow::{anyhow, Result};
-use std::fs;
+use std::collections::{HashMap, HashSet};
 
 use crate::model::Section;
-use crate::parse::parse_markdown;
+use crate::parse::{load_markdown, ParsedMarkdown};
 use crate::search::search_files;
 use crate::tokens::estimate_tokens;
+
+const SECTION_SEPARATOR: &str = "\n\n";
+const TRUNCATION_NOTICE: &str = "\n\n<!-- mdlens: truncated at token budget -->";
 
 /// Pack selected sections into a bounded token budget.
 pub struct PackResult {
@@ -25,37 +28,48 @@ pub struct PackIncludedSection {
     pub truncated: bool,
 }
 
+pub struct PackSearchOptions {
+    pub include_parents: bool,
+    pub dedupe: bool,
+    pub case_sensitive: bool,
+    pub use_regex: bool,
+    pub max_results: usize,
+    pub context_lines: usize,
+}
+
 /// Pack sections by IDs from a single file.
 pub fn pack_by_ids(
     path: &str,
     ids: &[String],
     max_tokens: usize,
     include_parents: bool,
+    dedupe: bool,
 ) -> Result<PackResult> {
-    let doc = parse_markdown(path)?;
-    let lines: Vec<String> = fs::read_to_string(path)?
-        .lines()
-        .map(|l| l.to_string())
-        .collect();
-
+    let mut cache = HashMap::new();
+    let parsed = get_or_load(&mut cache, path)?;
     let mut included_sections: Vec<OwnedSectionRef> = Vec::new();
-    let mut seen_ids = std::collections::HashSet::new();
+    let mut seen = HashSet::new();
 
     for id in ids {
-        if let Some(section) = doc.find_section_by_id(id) {
-            // Collect parent headings if requested
-            if include_parents {
-                collect_parents(&doc, section, &mut included_sections, &mut seen_ids);
-            }
+        let section = parsed
+            .doc
+            .find_section_by_id(id)
+            .ok_or_else(|| anyhow!("section id not found: {id}"))?;
 
-            // Add the section and handle deduplication (dedup handled inside collect function)
-            collect_section_and_unvisited_children(section, &mut included_sections, &mut seen_ids, path);
-        } else {
-            return Err(anyhow!("section id not found: {}", id));
+        if include_parents {
+            collect_parents(
+                &parsed.doc,
+                section,
+                &mut included_sections,
+                &mut seen,
+                dedupe,
+            );
         }
+
+        collect_section_and_children(section, &mut included_sections, &mut seen, path, dedupe);
     }
 
-    build_pack_result(&doc, &lines, &included_sections, max_tokens)
+    build_pack_result(&cache, &included_sections, max_tokens)
 }
 
 /// Pack sections by search query.
@@ -63,82 +77,43 @@ pub fn pack_by_search(
     root: &str,
     query: &str,
     max_tokens: usize,
-    include_parents: bool,
+    options: PackSearchOptions,
 ) -> Result<PackResult> {
-    let results = search_files(root, query, false, false, 20, 2)?;
+    let results = search_files(
+        root,
+        query,
+        options.case_sensitive,
+        options.use_regex,
+        options.max_results,
+        options.context_lines,
+    )?;
+    let mut cache = HashMap::new();
     let mut included_sections: Vec<OwnedSectionRef> = Vec::new();
-    let mut seen_ids = std::collections::HashSet::new();
+    let mut seen = HashSet::new();
 
     for result in &results {
-        let doc = parse_markdown(&result.path)?;
-        if let Some(section) = doc.find_section_by_id(&result.section_id) {
-            if include_parents {
-                collect_parents(&doc, section, &mut included_sections, &mut seen_ids);
+        let parsed = get_or_load(&mut cache, &result.path)?;
+        if let Some(section) = parsed.doc.find_section_by_id(&result.section_id) {
+            if options.include_parents {
+                collect_parents(
+                    &parsed.doc,
+                    section,
+                    &mut included_sections,
+                    &mut seen,
+                    options.dedupe,
+                );
             }
-            collect_section_and_unvisited_children(section, &mut included_sections, &mut seen_ids, &result.path);
+            collect_section_and_children(
+                section,
+                &mut included_sections,
+                &mut seen,
+                &result.path,
+                options.dedupe,
+            );
         }
     }
 
-    // Build combined content - need to resolve each section ref to actual content
-    let mut content = String::new();
-    let mut total_tokens: usize = 0;
-    let mut included = Vec::new();
-    let mut truncated = false;
-
-    for ref_section in &included_sections {
-        let doc = parse_markdown(&ref_section.path)?;
-        let lines: Vec<String> = fs::read_to_string(&ref_section.path)?
-            .lines()
-            .map(|l| l.to_string())
-            .collect();
-
-        if let Some(section) = doc.find_section_by_id(&ref_section.id) {
-            let section_text = if ref_section.is_parent_context {
-                // For parent context, only include the heading line
-                lines[section.line_start - 1].clone()
-            } else {
-                section.extract_content(&lines).join("\n")
-            };
-            let section_tokens = estimate_tokens(&section_text);
-
-            if total_tokens + section_tokens > max_tokens && !ref_section.is_parent_context {
-                let remaining = max_tokens - total_tokens;
-                if remaining > 0 {
-                    let truncated_text = truncate_to_tokens(&section_text, remaining);
-                    content.push_str("\n\n");
-                    content.push_str(&truncated_text);
-                    content.push_str("\n\n<!-- mdlens: truncated at token budget -->\n");
-                }
-                total_tokens = max_tokens;
-                truncated = true;
-                break;
-            }
-
-            if !content.is_empty() {
-                content.push_str("\n\n");
-            }
-            content.push_str(&section_text);
-            total_tokens += section_tokens;
-
-            included.push(PackIncludedSection {
-                path: ref_section.path.clone(),
-                section_id: section.id.clone(),
-                section_path: section.path.clone(),
-                line_start: section.line_start,
-                line_end: section.line_end,
-                token_estimate: section_tokens,
-                truncated: false,
-            });
-        }
-    }
-
-    Ok(PackResult {
-        token_budget: max_tokens,
-        token_estimate: total_tokens,
-        truncated,
-        included,
-        content,
-    })
+    build_pack_result(&cache, &included_sections, max_tokens)
 }
 
 struct OwnedSectionRef {
@@ -147,40 +122,54 @@ struct OwnedSectionRef {
     is_parent_context: bool,
 }
 
+fn get_or_load<'a>(
+    cache: &'a mut HashMap<String, ParsedMarkdown>,
+    path: &str,
+) -> Result<&'a ParsedMarkdown> {
+    if !cache.contains_key(path) {
+        cache.insert(path.to_string(), load_markdown(path)?);
+    }
+    Ok(cache.get(path).expect("parsed markdown should be cached"))
+}
+
 fn collect_parents(
     doc: &crate::model::Document,
     target: &Section,
     included: &mut Vec<OwnedSectionRef>,
-    seen: &mut std::collections::HashSet<String>,
+    seen: &mut HashSet<String>,
+    dedupe: bool,
 ) {
-    let mut parent_map: std::collections::HashMap<String, Option<String>> = std::collections::HashMap::new();
+    let mut parent_map = HashMap::new();
     build_parent_map(&doc.sections, None, &mut parent_map);
 
     let mut chain = Vec::new();
     let mut current_id = target.id.clone();
-    while let Some(Some(pid)) = parent_map.get(&current_id) {
-        if let Some(parent_sec) = doc.find_section_by_id(pid) {
-            chain.push(parent_sec);
+    while let Some(Some(parent_id)) = parent_map.get(&current_id) {
+        if let Some(parent) = doc.find_section_by_id(parent_id) {
+            chain.push(parent);
         }
-        current_id = pid.clone();
+        current_id = parent_id.clone();
     }
     chain.reverse();
 
-    for parent in &chain {
-        if seen.insert(parent.id.clone()) {
-            included.push(OwnedSectionRef {
+    for parent in chain {
+        push_ref(
+            OwnedSectionRef {
                 path: doc.path.clone(),
                 id: parent.id.clone(),
                 is_parent_context: true,
-            });
-        }
+            },
+            included,
+            seen,
+            dedupe,
+        );
     }
 }
 
 fn build_parent_map(
     sections: &[Section],
     parent_id: Option<String>,
-    map: &mut std::collections::HashMap<String, Option<String>>,
+    map: &mut HashMap<String, Option<String>>,
 ) {
     for section in sections {
         map.insert(section.id.clone(), parent_id.clone());
@@ -188,100 +177,107 @@ fn build_parent_map(
     }
 }
 
-fn collect_section_and_unvisited_children(
+fn collect_section_and_children(
     section: &Section,
     included: &mut Vec<OwnedSectionRef>,
-    seen: &mut std::collections::HashSet<String>,
+    seen: &mut HashSet<String>,
     file_path: &str,
+    dedupe: bool,
 ) {
-    if seen.insert(section.id.clone()) {
-        included.push(OwnedSectionRef {
+    push_ref(
+        OwnedSectionRef {
             path: file_path.to_string(),
             id: section.id.clone(),
             is_parent_context: false,
-        });
-        for child in &section.children {
-            collect_section_and_unvisited_children(child, included, seen, file_path);
-        }
+        },
+        included,
+        seen,
+        dedupe,
+    );
+
+    for child in &section.children {
+        collect_section_and_children(child, included, seen, file_path, dedupe);
+    }
+}
+
+fn push_ref(
+    section_ref: OwnedSectionRef,
+    included: &mut Vec<OwnedSectionRef>,
+    seen: &mut HashSet<String>,
+    dedupe: bool,
+) {
+    if !dedupe {
+        included.push(section_ref);
+        return;
+    }
+
+    let key = format!(
+        "{}::{}::{}",
+        section_ref.path, section_ref.id, section_ref.is_parent_context
+    );
+    if seen.insert(key) {
+        included.push(section_ref);
     }
 }
 
 fn build_pack_result(
-    doc: &crate::model::Document,
-    lines: &[String],
+    cache: &HashMap<String, ParsedMarkdown>,
     included_sections: &[OwnedSectionRef],
     max_tokens: usize,
 ) -> Result<PackResult> {
     let mut content = String::new();
-    let mut total_tokens: usize = 0;
+    let mut total_tokens = 0usize;
     let mut included = Vec::new();
     let mut truncated = false;
 
-    for ref_section in included_sections {
-        let actual_path = if ref_section.path.is_empty() {
-            doc.path.clone()
-        } else {
-            ref_section.path.clone()
+    for section_ref in included_sections {
+        let parsed = cache
+            .get(&section_ref.path)
+            .ok_or_else(|| anyhow!("missing parsed markdown cache for {}", section_ref.path))?;
+        let Some(section) = parsed.doc.find_section_by_id(&section_ref.id) else {
+            continue;
         };
 
-        // Read section info and content
-        let (section_info, section_text) = if ref_section.path.is_empty() {
-            if let Some(section) = doc.find_section_by_id(&ref_section.id) {
-                let text = if ref_section.is_parent_context {
-                    lines[section.line_start - 1].clone()
-                } else {
-                    section.extract_content(lines).join("\n")
-                };
-                (SectionInfo::from(section), text)
-            } else {
-                continue;
-            }
+        let section_text = if section_ref.is_parent_context {
+            parsed.lines[section.line_start - 1].clone()
         } else {
-            let other_doc = parse_markdown(&ref_section.path)?;
-            let other_lines: Vec<String> = fs::read_to_string(&ref_section.path)?
-                .lines()
-                .map(|l| l.to_string())
-                .collect();
-            if let Some(section) = other_doc.find_section_by_id(&ref_section.id) {
-                let text = if ref_section.is_parent_context {
-                    other_lines[section.line_start - 1].clone()
-                } else {
-                    section.extract_content(&other_lines).join("\n")
-                };
-                (SectionInfo::from(section), text)
-            } else {
-                continue;
-            }
+            section.extract_content(&parsed.lines).join("\n")
         };
 
-        let section_tokens = estimate_tokens(&section_text);
+        let appended = if content.is_empty() {
+            section_text.clone()
+        } else {
+            format!("{SECTION_SEPARATOR}{section_text}")
+        };
+        let appended_tokens = estimate_tokens(&appended);
 
-        if total_tokens + section_tokens > max_tokens && !ref_section.is_parent_context {
-            let remaining = max_tokens - total_tokens;
+        if total_tokens + appended_tokens > max_tokens {
+            if section_ref.is_parent_context {
+                truncated = true;
+                break;
+            }
+
+            let remaining = max_tokens.saturating_sub(total_tokens);
             if remaining > 0 {
-                let truncated_text = truncate_to_tokens(&section_text, remaining);
-                content.push_str("\n\n");
-                content.push_str(&truncated_text);
-                content.push_str("\n\n<!-- mdlens: truncated at token budget -->\n");
+                let truncated_segment = truncate_segment_to_tokens(&appended, remaining);
+                if !truncated_segment.is_empty() {
+                    total_tokens += estimate_tokens(&truncated_segment);
+                    content.push_str(&truncated_segment);
+                }
             }
-            total_tokens = max_tokens;
             truncated = true;
             break;
         }
 
-        if !content.is_empty() {
-            content.push_str("\n\n");
-        }
-        content.push_str(&section_text);
-        total_tokens += section_tokens;
-
+        content.push_str(&appended);
+        total_tokens += appended_tokens;
         included.push(PackIncludedSection {
-            path: actual_path,
-            section_id: section_info.id,
-            section_path: section_info.path,
-            line_start: section_info.line_start,
-            line_end: section_info.line_end,
-            token_estimate: section_tokens,
+            path: section_ref.path.clone(),
+            section_id: section.id.clone(),
+            section_path: section.path.clone(),
+            line_start: section.line_start,
+            line_end: section.line_end,
+            token_estimate: estimate_tokens(&section_text),
             truncated: false,
         });
     }
@@ -295,41 +291,36 @@ fn build_pack_result(
     })
 }
 
-/// Owned section info for use across function boundaries.
-struct SectionInfo {
-    id: String,
-    path: Vec<String>,
-    line_start: usize,
-    line_end: usize,
-}
-
-impl<'a> From<&'a Section> for SectionInfo {
-    fn from(s: &'a Section) -> Self {
-        SectionInfo {
-            id: s.id.clone(),
-            path: s.path.clone(),
-            line_start: s.line_start,
-            line_end: s.line_end,
-        }
+/// Truncate text to fit within a token budget and reserve room for the notice.
+fn truncate_segment_to_tokens(text: &str, max_tokens: usize) -> String {
+    if max_tokens == 0 {
+        return String::new();
     }
-}
 
-/// Truncate text to fit within a token budget.
-fn truncate_to_tokens(text: &str, max_tokens: usize) -> String {
-    let max_chars = max_tokens * 4;
-    if text.chars().count() <= max_chars {
+    if estimate_tokens(text) <= max_tokens {
         return text.to_string();
     }
 
-    let mut char_count = 0;
-    let mut truncate_at = 0;
-    for (idx, ch) in text.char_indices() {
-        char_count += 1;
-        if char_count >= max_chars {
-            truncate_at = idx + ch.len_utf8();
-            break;
-        }
+    let notice_tokens = estimate_tokens(TRUNCATION_NOTICE);
+    if max_tokens <= notice_tokens {
+        return String::new();
     }
 
-    text[..truncate_at].to_string()
+    let target_chars = (max_tokens - notice_tokens) * 4;
+    let mut char_count = 0usize;
+    let mut truncate_at = 0usize;
+
+    for (idx, ch) in text.char_indices() {
+        char_count += 1;
+        if char_count > target_chars {
+            break;
+        }
+        truncate_at = idx + ch.len_utf8();
+    }
+
+    if truncate_at == 0 {
+        return String::new();
+    }
+
+    format!("{}{}", &text[..truncate_at], TRUNCATION_NOTICE)
 }

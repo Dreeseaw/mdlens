@@ -1,9 +1,10 @@
 use anyhow::Result;
 use regex::Regex;
-use std::fs;
+use std::collections::BTreeMap;
 use std::path::Path;
 
 use crate::model::Section;
+use crate::parse::load_markdown;
 use crate::render::{SearchResult, SearchSnippet};
 
 /// Search markdown files for a query and return section-level results.
@@ -19,21 +20,25 @@ pub fn search_files(
     let mut all_results: Vec<SearchResult> = Vec::new();
 
     for file_path in &files {
-        let doc = crate::parse::parse_markdown(file_path)?;
-        let lines: Vec<String> = fs::read_to_string(file_path)?
-            .lines()
-            .map(|l| l.to_string())
-            .collect();
-
-        let results = search_document(&doc, &lines, query, case_sensitive, use_regex, context_lines)?;
+        let parsed = load_markdown(file_path)?;
+        let results = search_document(
+            &parsed.doc,
+            &parsed.lines,
+            query,
+            case_sensitive,
+            use_regex,
+            context_lines,
+        )?;
         all_results.extend(results);
     }
 
-    // Sort by match count descending, then by token estimate ascending
-    all_results.sort_by(|a, b| {
-        b.match_count
-            .cmp(&a.match_count)
-            .then(a.token_estimate.cmp(&b.token_estimate))
+    all_results.sort_by(|lhs, rhs| {
+        rhs.match_count
+            .cmp(&lhs.match_count)
+            .then(lhs.token_estimate.cmp(&rhs.token_estimate))
+            .then(lhs.path.cmp(&rhs.path))
+            .then(lhs.line_start.cmp(&rhs.line_start))
+            .then(lhs.section_id.cmp(&rhs.section_id))
     });
 
     Ok(all_results.into_iter().take(max_results).collect())
@@ -48,9 +53,6 @@ fn search_document(
     use_regex: bool,
     context_lines: usize,
 ) -> Result<Vec<SearchResult>> {
-    let mut results: Vec<SearchResult> = Vec::new();
-
-    // Build regex pattern
     let pattern = if use_regex {
         query.to_string()
     } else {
@@ -60,31 +62,44 @@ fn search_document(
     let regex = if case_sensitive {
         Regex::new(&pattern)?
     } else {
-        Regex::new(&format!("(?i){}", pattern))?
+        Regex::new(&format!("(?i){pattern}"))?
     };
 
-    // Search each line and group by section
-    let mut section_matches: std::collections::HashMap<String, Vec<MatchLine>> =
-        std::collections::HashMap::new();
+    let ordered_sections = flatten_sections(&doc.sections);
+    let mut active_sections: Vec<&Section> = Vec::new();
+    let mut next_section_idx = 0usize;
+    let mut section_matches: BTreeMap<String, Vec<MatchLine>> = BTreeMap::new();
 
     for (line_idx, line) in lines.iter().enumerate() {
         let line_num = line_idx + 1;
+
+        while active_sections
+            .last()
+            .is_some_and(|section| section.line_end < line_num)
+        {
+            active_sections.pop();
+        }
+
+        while next_section_idx < ordered_sections.len()
+            && ordered_sections[next_section_idx].line_start == line_num
+        {
+            active_sections.push(ordered_sections[next_section_idx]);
+            next_section_idx += 1;
+        }
+
         if regex.is_match(line) {
-            // Find which section this line belongs to
-            if let Some(section) = find_section_for_line(&doc.sections, line_num) {
+            if let Some(section) = active_sections.last() {
                 section_matches
                     .entry(section.id.clone())
                     .or_default()
-                    .push(MatchLine {
-                        line_num,
-                    });
+                    .push(MatchLine { line_num });
             }
         }
     }
 
+    let mut results = Vec::new();
     for (section_id, matches) in section_matches {
         if let Some(section) = doc.find_section_by_id(&section_id) {
-            let snippets = build_snippets(&matches, context_lines, lines);
             results.push(SearchResult {
                 path: doc.path.clone(),
                 section_id: section.id.clone(),
@@ -94,12 +109,31 @@ fn search_document(
                 line_end: section.line_end,
                 token_estimate: section.token_estimate,
                 match_count: matches.len(),
-                snippets,
+                snippets: build_snippets(&matches, context_lines, lines),
             });
         }
     }
 
     Ok(results)
+}
+
+fn flatten_sections(sections: &[Section]) -> Vec<&Section> {
+    let mut ordered = Vec::new();
+    collect_sections(sections, &mut ordered);
+    ordered.sort_by(|lhs, rhs| {
+        lhs.line_start
+            .cmp(&rhs.line_start)
+            .then(lhs.level.cmp(&rhs.level))
+            .then(lhs.id.cmp(&rhs.id))
+    });
+    ordered
+}
+
+fn collect_sections<'a>(sections: &'a [Section], ordered: &mut Vec<&'a Section>) {
+    for section in sections {
+        ordered.push(section);
+        collect_sections(&section.children, ordered);
+    }
 }
 
 fn build_snippets(
@@ -114,10 +148,7 @@ fn build_snippets(
         } else {
             0
         };
-        let end = std::cmp::min(
-            match_line.line_num + context_lines,
-            lines.len(),
-        );
+        let end = std::cmp::min(match_line.line_num + context_lines, lines.len());
 
         snippets.push(SearchSnippet {
             line_start: start + 1,
@@ -130,19 +161,6 @@ fn build_snippets(
 
 struct MatchLine {
     line_num: usize,
-}
-
-/// Find which section contains a given line number.
-fn find_section_for_line(sections: &[Section], line_num: usize) -> Option<&Section> {
-    for section in sections {
-        if line_num >= section.line_start && line_num <= section.line_end {
-            return Some(section);
-        }
-        if let Some(child) = find_section_for_line(&section.children, line_num) {
-            return Some(child);
-        }
-    }
-    None
 }
 
 /// Discover markdown files in a directory or return a single file.

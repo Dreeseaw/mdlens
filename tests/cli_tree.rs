@@ -1,5 +1,7 @@
 use assert_cmd::Command;
 use predicates::prelude::*;
+use std::io::Write;
+use tempfile::NamedTempFile;
 
 const FIXTURES: &str = "tests/fixtures";
 
@@ -17,7 +19,9 @@ fn tree_simple_file() {
 #[test]
 fn tree_simple_json() {
     let mut cmd = Command::cargo_bin("mdlens").unwrap();
-    cmd.arg("tree").arg(format!("{}/simple.md", FIXTURES)).arg("--json");
+    cmd.arg("tree")
+        .arg(format!("{}/simple.md", FIXTURES))
+        .arg("--json");
     cmd.assert().success();
 
     let output = cmd.output().unwrap();
@@ -44,6 +48,23 @@ fn tree_nested() {
 }
 
 #[test]
+fn tree_nested_top_level_ids_are_distinct() {
+    let mut cmd = Command::cargo_bin("mdlens").unwrap();
+    cmd.arg("tree")
+        .arg(format!("{}/nested.md", FIXTURES))
+        .arg("--json");
+    cmd.assert().success();
+
+    let output = cmd.output().unwrap();
+    let stdout = String::from_utf8(output.stdout).unwrap();
+    let json: serde_json::Value = serde_json::from_str(&stdout).unwrap();
+    let sections = json["sections"].as_array().unwrap();
+
+    assert_eq!(sections[0]["id"], "1");
+    assert_eq!(sections[1]["id"], "2");
+}
+
+#[test]
 fn tree_no_headings() {
     let mut cmd = Command::cargo_bin("mdlens").unwrap();
     cmd.arg("tree")
@@ -62,6 +83,25 @@ fn tree_code_blocks() {
         .success()
         .stdout(predicate::str::contains("Real Heading"))
         .stdout(predicate::str::contains("Real Child"))
+        .stdout(predicate::str::contains("Fake Heading").not());
+}
+
+#[test]
+fn tree_ignores_no_space_and_tilde_fence_headings() {
+    let mut file = NamedTempFile::new().unwrap();
+    write!(
+        file,
+        "# Real Heading\n\n##NoSpace\n\n~~~md\n# Fake Heading\n~~~\n\n## Real Child\n"
+    )
+    .unwrap();
+
+    let mut cmd = Command::cargo_bin("mdlens").unwrap();
+    cmd.arg("tree").arg(file.path());
+    cmd.assert()
+        .success()
+        .stdout(predicate::str::contains("Real Heading"))
+        .stdout(predicate::str::contains("Real Child"))
+        .stdout(predicate::str::contains("NoSpace").not())
         .stdout(predicate::str::contains("Fake Heading").not());
 }
 

@@ -1,5 +1,7 @@
 use assert_cmd::Command;
 use predicates::prelude::*;
+use std::io::Write;
+use tempfile::NamedTempFile;
 
 const FIXTURES: &str = "tests/fixtures";
 
@@ -48,6 +50,21 @@ fn read_by_path() {
 }
 
 #[test]
+fn read_by_path_with_literal_separator() {
+    let mut file = NamedTempFile::new().unwrap();
+    write!(file, "# A > B\n\nBody.\n").unwrap();
+
+    let mut cmd = Command::cargo_bin("mdlens").unwrap();
+    cmd.arg("read")
+        .arg(file.path())
+        .arg("--heading-path")
+        .arg(r"A \> B");
+    cmd.assert()
+        .success()
+        .stdout(predicate::str::contains("Body."));
+}
+
+#[test]
 fn read_by_lines() {
     let mut cmd = Command::cargo_bin("mdlens").unwrap();
     cmd.arg("read")
@@ -74,6 +91,21 @@ fn read_with_parents() {
     // Should contain parent headings
     assert!(stdout.contains("# A"));
     assert!(stdout.contains("## B"));
+}
+
+#[test]
+fn read_no_children_excludes_nested_sections() {
+    let mut cmd = Command::cargo_bin("mdlens").unwrap();
+    cmd.arg("read")
+        .arg(format!("{}/nested.md", FIXTURES))
+        .arg("--id")
+        .arg("1")
+        .arg("--no-children");
+    cmd.assert()
+        .success()
+        .stdout(predicate::str::contains("Content of A."))
+        .stdout(predicate::str::contains("Content of B").not())
+        .stdout(predicate::str::contains("Content of C").not());
 }
 
 #[test]

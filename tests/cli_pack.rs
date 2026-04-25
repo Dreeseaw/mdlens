@@ -82,6 +82,49 @@ fn pack_by_search() {
 }
 
 #[test]
+fn pack_by_search_honors_regex() {
+    let mut cmd = Command::cargo_bin("mdlens").unwrap();
+    cmd.arg("pack")
+        .arg(format!("{}/duplicate_headings.md", FIXTURES))
+        .arg("--search")
+        .arg("Results|Analysis")
+        .arg("--regex")
+        .arg("--max-tokens")
+        .arg("5000")
+        .arg("--json");
+    cmd.assert().success();
+
+    let output = cmd.output().unwrap();
+    let stdout = String::from_utf8(output.stdout).unwrap();
+    let json: serde_json::Value = serde_json::from_str(&stdout).unwrap();
+
+    assert!(json["included"].as_array().unwrap().len() >= 2);
+}
+
+#[test]
+fn pack_no_dedupe_keeps_duplicate_ids() {
+    let mut cmd = Command::cargo_bin("mdlens").unwrap();
+    cmd.arg("pack")
+        .arg(format!("{}/simple.md", FIXTURES))
+        .arg("--ids")
+        .arg("1.1,1.1")
+        .arg("--no-dedupe")
+        .arg("--max-tokens")
+        .arg("5000")
+        .arg("--json");
+    cmd.assert().success();
+
+    let output = cmd.output().unwrap();
+    let stdout = String::from_utf8(output.stdout).unwrap();
+    let json: serde_json::Value = serde_json::from_str(&stdout).unwrap();
+    let included = json["included"].as_array().unwrap();
+
+    assert_eq!(included.len(), 2);
+    assert_eq!(included[0]["section_id"], "1.1");
+    assert_eq!(included[1]["section_id"], "1.1");
+}
+
+#[test]
 fn pack_no_selector() {
     let mut cmd = Command::cargo_bin("mdlens").unwrap();
     cmd.arg("pack")
