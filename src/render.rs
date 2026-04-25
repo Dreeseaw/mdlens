@@ -156,3 +156,56 @@ pub struct PackIncluded {
     pub line_range: String,
     pub token_estimate: usize,
 }
+
+pub struct SectionsEntry {
+    pub file_path: String,
+    pub id: String,
+    pub title: String,
+    pub heading_path: Option<Vec<String>>,
+    pub line_start: Option<usize>,
+    pub line_end: Option<usize>,
+    pub token_estimate: usize,
+    pub body: Option<String>,
+}
+
+pub fn render_sections(entries: &[SectionsEntry], with_content: bool) -> String {
+    let mut out = String::new();
+    let mut current_file: Option<&str> = None;
+
+    for entry in entries {
+        if Some(entry.file_path.as_str()) != current_file {
+            if !out.is_empty() {
+                out.push('\n');
+            }
+            out.push_str(&entry.file_path);
+            out.push('\n');
+            current_file = Some(entry.file_path.as_str());
+        }
+
+        out.push_str(&format!("  \u{a7}{} {}", entry.id, entry.title));
+
+        if let (Some(start), Some(end)) = (entry.line_start, entry.line_end) {
+            out.push_str(&format!(" (lines {}-{}", start, end));
+            out.push_str(&format!(", ~{} tokens)", entry.token_estimate));
+        } else {
+            out.push_str(&format!(" (~{} tokens)", entry.token_estimate));
+        }
+        out.push('\n');
+
+        if let Some(ref hp) = entry.heading_path {
+            out.push_str(&format!("    path: {}\n", hp.join(" > ")));
+        }
+
+        if with_content {
+            if let Some(ref body) = entry.body {
+                for line in body.lines() {
+                    out.push_str("    ");
+                    out.push_str(line);
+                    out.push('\n');
+                }
+            }
+        }
+    }
+
+    out
+}

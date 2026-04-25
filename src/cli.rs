@@ -3,12 +3,16 @@ use clap::{Parser, Subcommand, ValueEnum};
 use serde::Serialize;
 use std::cmp::Reverse;
 
+use std::collections::HashSet;
+use std::io::{self, BufRead};
+
 use crate::errors;
 use crate::model::Section;
 use crate::pack::{pack_by_ids, PackSearchOptions};
 use crate::parse::{load_markdown, parse_markdown};
 use crate::render::{
-    render_pack, render_read, render_search, render_stats, render_tree, PackIncluded, StatsEntry,
+    render_pack, render_read, render_search, render_sections, render_stats, render_tree,
+    PackIncluded, SectionsEntry, StatsEntry,
 };
 use crate::search::search_files;
 use crate::tokens::{estimate_tokens, truncate_to_tokens};
@@ -36,6 +40,8 @@ enum Commands {
     Pack(PackArgs),
     /// Inspect file sizes, word counts, and token estimates
     Stats(StatsArgs),
+    /// Read file paths from stdin and output structured section metadata
+    Sections(SectionsArgs),
 }
 
 #[derive(clap::Args)]
@@ -173,6 +179,31 @@ struct StatsArgs {
     top: Option<usize>,
 }
 
+#[derive(clap::Args)]
+struct SectionsArgs {
+    /// Include full section body text (default: metadata only)
+    #[arg(long)]
+    content: bool,
+    /// Cap total output tokens (truncates last section if exceeded)
+    #[arg(long)]
+    max_tokens: Option<usize>,
+    /// Machine-readable JSON output
+    #[arg(long)]
+    json: bool,
+    /// Include heading path (e.g. "SGOCR Champion > Candidate Quality")
+    #[arg(long)]
+    heading_paths: bool,
+    /// Include original line numbers (start-end)
+    #[arg(long)]
+    lines: bool,
+    /// Deduplicate sections if same section matches multiple lines (default: true)
+    #[arg(long, default_value_t = true)]
+    dedupe: bool,
+    /// Allow duplicate sections in output
+    #[arg(long, conflicts_with = "dedupe")]
+    no_dedupe: bool,
+}
+
 pub fn run() -> Result<()> {
     let cli = Cli::parse();
 
@@ -182,6 +213,7 @@ pub fn run() -> Result<()> {
         Commands::Search(args) => cmd_search(args),
         Commands::Pack(args) => cmd_pack(args),
         Commands::Stats(args) => cmd_stats(args),
+        Commands::Sections(args) => cmd_sections(args),
     }
 }
 
@@ -685,6 +717,181 @@ fn cmd_stats(args: StatsArgs) -> Result<()> {
     Ok(())
 }
 
+fn cmd_sections(args: SectionsArgs) -> Result<()> {
+    let stdin = io::stdin();
+    let mut paths: Vec<String> = Vec::new();
+
+    for line in stdin.lock().lines() {
+        let line = line?;
+        let trimmed = line.trim().to_string();
+        if !trimmed.is_empty() {
+            paths.push(trimmed);
+        }
+    }
+
+    if paths.is_empty() {
+        return Ok(());
+    }
+
+    let dedupe = args.dedupe && !args.no_dedupe;
+    if dedupe {
+        let mut seen = HashSet::new();
+        paths.retain(|p| seen.insert(p.clone()));
+    }
+
+    let mut file_outputs: Vec<SectionsFileOutput> = Vec::new();
+    let mut total_tokens: usize = 0;
+    let mut omitted: usize = 0;
+
+    for path in &paths {
+        let parsed = match load_markdown(path) {
+            Ok(p) => p,
+            Err(e) => {
+                eprintln!("Warning: could not read {}: {}", path, e);
+                continue;
+            }
+        };
+
+        let doc = &parsed.doc;
+        let lines = &parsed.lines;
+
+        let mut sections: Vec<SectionsSectionOutput> = Vec::new();
+        collect_all_sections(&doc.sections, lines, &mut sections);
+
+        if sections.is_empty() {
+            continue;
+        }
+
+        // Apply max-tokens cap
+        if let Some(max_tokens) = args.max_tokens {
+            let mut kept: Vec<SectionsSectionOutput> = Vec::new();
+            for sec in sections {
+                if total_tokens + sec.token_estimate > max_tokens {
+                    omitted += 1;
+                } else {
+                    total_tokens += sec.token_estimate;
+                    kept.push(sec);
+                }
+            }
+            sections = kept;
+        }
+
+        if !sections.is_empty() {
+            file_outputs.push(SectionsFileOutput {
+                path: path.clone(),
+                sections,
+            });
+        }
+    }
+
+    if omitted > 0 {
+        eprintln!(
+            "Warning: {} sections omitted, would exceed {} token limit",
+            omitted,
+            args.max_tokens.unwrap_or(0)
+        );
+    }
+
+    if file_outputs.is_empty() {
+        return Ok(());
+    }
+
+    if args.json {
+        let output = SectionsJsonOutput {
+            schema_version: 1,
+            files: file_outputs
+                .iter()
+                .map(|fo| SectionsJsonFile {
+                    path: fo.path.clone(),
+                    sections: fo
+                        .sections
+                        .iter()
+                        .map(|s| SectionsJsonSection {
+                            id: s.id.clone(),
+                            title: s.title.clone(),
+                            heading_path: if args.heading_paths {
+                                Some(s.heading_path.clone())
+                            } else {
+                                None
+                            },
+                            line_start: if args.lines { Some(s.line_start) } else { None },
+                            line_end: if args.lines { Some(s.line_end) } else { None },
+                            token_estimate: s.token_estimate,
+                            body: if args.content {
+                                Some(s.body.clone())
+                            } else {
+                                None
+                            },
+                        })
+                        .collect(),
+                })
+                .collect(),
+        };
+        println!("{}", serde_json::to_string_pretty(&output)?);
+    } else {
+        let entries: Vec<SectionsEntry> = file_outputs
+            .iter()
+            .flat_map(|fo| {
+                fo.sections.iter().map(|s| SectionsEntry {
+                    file_path: fo.path.clone(),
+                    id: s.id.clone(),
+                    title: s.title.clone(),
+                    heading_path: if args.heading_paths {
+                        Some(s.heading_path.clone())
+                    } else {
+                        None
+                    },
+                    line_start: if args.lines { Some(s.line_start) } else { None },
+                    line_end: if args.lines { Some(s.line_end) } else { None },
+                    token_estimate: s.token_estimate,
+                    body: if args.content { Some(s.body.clone()) } else { None },
+                })
+            })
+            .collect();
+        println!("{}", render_sections(&entries, args.content));
+    }
+
+    Ok(())
+}
+
+struct SectionsSectionOutput {
+    id: String,
+    title: String,
+    heading_path: Vec<String>,
+    line_start: usize,
+    line_end: usize,
+    token_estimate: usize,
+    body: String,
+}
+
+struct SectionsFileOutput {
+    path: String,
+    sections: Vec<SectionsSectionOutput>,
+}
+
+fn collect_all_sections(
+    sections: &[Section],
+    lines: &[String],
+    result: &mut Vec<SectionsSectionOutput>,
+) {
+    for section in sections {
+        if section.title == "<preamble>" {
+            continue;
+        }
+        let body = section.extract_content(lines).join("\n");
+        result.push(SectionsSectionOutput {
+            id: section.id.clone(),
+            title: section.title.clone(),
+            heading_path: section.path.clone(),
+            line_start: section.line_start,
+            line_end: section.line_end,
+            token_estimate: section.token_estimate,
+            body,
+        });
+        collect_all_sections(&section.children, lines, result);
+    }
+}
+
 // --- JSON output types ---
 
 #[derive(Serialize)]
@@ -807,6 +1014,33 @@ struct StatsJsonEntry {
     lines: usize,
     words: usize,
     tokens: usize,
+}
+
+#[derive(Serialize)]
+struct SectionsJsonOutput {
+    schema_version: u32,
+    files: Vec<SectionsJsonFile>,
+}
+
+#[derive(Serialize)]
+struct SectionsJsonFile {
+    path: String,
+    sections: Vec<SectionsJsonSection>,
+}
+
+#[derive(Serialize)]
+struct SectionsJsonSection {
+    id: String,
+    title: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    heading_path: Option<Vec<String>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    line_start: Option<usize>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    line_end: Option<usize>,
+    token_estimate: usize,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    body: Option<String>,
 }
 
 // --- Helper functions ---
