@@ -12,7 +12,7 @@ Use `mdlens` instead of raw full-file reads when working with Markdown.
 For a question over a Markdown directory, start with:
 
 ```bash
-mdlens scout <dir> "<question>" --max-tokens 1400
+mdlens scout "$DOCS_DIR" "$QUESTION" --max-tokens 1400
 ```
 
 Read `[highlights]` first, then `[evidence]`. If the answer is present, stop and answer directly. Preserve exact short source terms such as flags, IDs, option names, metrics, table values, and policy phrases.
@@ -20,7 +20,7 @@ Read `[highlights]` first, then `[evidence]`. If the answer is present, stop and
 If exactly one detail is missing, use the section map from `[files]`:
 
 ```bash
-mdlens read <file> --id <section-id> --max-tokens 1200
+mdlens read "$FILE" --id "$SECTION_ID" --max-tokens 1200
 ```
 
 Avoid reading whole Markdown files unless `scout` clearly found the wrong file.

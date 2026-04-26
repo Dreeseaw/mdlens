@@ -6,10 +6,11 @@ Only locked question sets and methodology notes are included. The generated or
 private corpora and raw model outputs are intentionally omitted from the public
 crate repository.
 
-These evals are mostly Markdown search and question-answering workflows. They
-measure whether agents can answer from documentation with fewer irrelevant reads,
-fewer calls, lower cost, and better recall. They are not a broad benchmark of
-general coding-agent performance.
+Important caveat: these evals are entirely Markdown QA/search. They are not a
+broad benchmark of general coding-agent performance, even though Markdown QA is
+a common part of coding-agent work. They measure whether agents can answer from
+documentation with fewer irrelevant reads, fewer calls, lower cost, and better
+recall.
 
 ## `combined_markdown_v1`
 
@@ -41,6 +42,10 @@ README also covered Codex, opencode, Pi, and Claude harnesses over GPT-5.4,
 Sonnet 4.6, GPT-5.4 Mini, Haiku 4.5, Kimi K2.6, GLM 5.1, and Qwen 3.6 Plus.
 Native Claude Sonnet produced partial provider/credit failures late in the run,
 so the headline aggregate excludes partial harness/model pairs.
+
+The reproducibility dataset with the Markdown corpus, locked questions, manifest,
+and run summaries is published at
+[`dreeseaw/mdlens-combined-markdown-v1`](https://huggingface.co/datasets/dreeseaw/mdlens-combined-markdown-v1).
 
 ## `messy_markdown_v1`
 
@@ -74,10 +79,10 @@ Earlier clean full-corpus runs:
 
 ## `scicat_markdown_v1`
 
-This eval is a scientific Markdown proxy seeded from published SciCat research
-metadata. The local fixture combined SciCat-derived scientific README targets
-with Hugging Face model/dataset cards and GitHub scientific/research Markdown
-fallback material to reach a realistic Markdown corpus size.
+This eval is a SciCat-style scientific README proxy. The local fixture combined
+SciCat-derived scientific README targets with Hugging Face model/dataset cards
+and GitHub scientific/research Markdown fallback material to reach a realistic
+Markdown corpus size.
 
 The 25 locked questions cover install commands, configuration flags, conceptual
 summaries, cross-section README synthesis, and negative/abstention cases.

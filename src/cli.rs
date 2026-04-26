@@ -134,13 +134,16 @@ struct SearchArgs {
     long_about = "One-shot agent evidence pack for answering a natural-language question over Markdown.\n\n`scout` is optimized for agent workflows: fewer shell calls, bounded output,\nand enough section context to answer without dumping whole files. It searches\nsection text, headings, paths, parent context, and table rows; ranks likely\nevidence; then emits a compact pack."
 )]
 #[command(
-    after_help = "Agent workflow:\n  - Use scout as the first retrieval call for QA over a directory:\n      mdlens scout docs/ \"What policy changed between the old and current loader?\" --max-tokens 1400\n  - Read [highlights] first. They are globally ranked compact evidence lines.\n  - Then read [evidence]. Each block names file, section id, heading path, line\n    span, token estimate, and ranking reason.\n  - If the answer is present, stop and answer directly. Preserve distinctive\n    terms: flags, IDs, metrics, option names, row values, labels, and short\n    policy phrases.\n  - Copy short source phrases exactly when they are likely answer terms; avoid\n    changing singular/plural or rewriting concise labels into paraphrases.\n  - If exactly one fact is missing, use the section map from [files] and read\n    one section:\n      mdlens read <file> --id <section-id> --max-tokens 1200\n  - Use `mdlens search` only when scout clearly found the wrong file or when\n    you need a second independent query.\n\nHow to interpret scout output:\n  [queries]   Search expansions derived from the question.\n  [files]     Candidate files, picked section ids, and nearby unread sections.\n  [focus]     Dominant file when the question appears single-file.\n  [highlights] Globally ranked lines/table rows likely to answer the question.\n  [evidence]  Bounded excerpts from the selected sections.\n\nQuestion-shape guidance:\n  - Current-vs-stale questions: prefer sections marked current/current loader;\n    treat Do Not Use, stale notes, copied tables, and old runbooks as distractors.\n  - Table questions: keep the table header with the selected row; do not average\n    unrelated rows unless the document says to.\n  - Why, policy, safety, privacy, negative, or tradeoff questions: include the\n    compact rule/risk/rationale bullets, not only the command or metric.\n  - Multi-file comparison: answer each named entity separately, then summarize\n    the shared pattern.\n  - Missing evidence: say the corpus does not specify the fact rather than\n    guessing from file names.\n\nUseful defaults:\n  --max-tokens 1400 keeps scout cheap for most agent turns.\n  --max-sections 12 gives enough diversity before packing.\n  --max-files 4 keeps the file map readable."
+    after_help = "Agent workflow:\n  - Use scout as the first retrieval call for QA over a directory:\n      mdlens scout docs/ \"What policy changed between the old and current loader?\" --max-tokens 1400\n  - Use --json when a harness wants structured metadata plus the same rendered evidence pack.\n  - Read [highlights] first. They are globally ranked compact evidence lines.\n  - Then read [evidence]. Each block names file, section id, heading path, line\n    span, token estimate, and ranking reason.\n  - If the answer is present, stop and answer directly. Preserve distinctive\n    terms: flags, IDs, metrics, option names, row values, labels, and short\n    policy phrases.\n  - Copy short source phrases exactly when they are likely answer terms; avoid\n    changing singular/plural or rewriting concise labels into paraphrases.\n  - If exactly one fact is missing, use the section map from [files] and read\n    one section:\n      mdlens read <file> --id <section-id> --max-tokens 1200\n  - Use `mdlens search` only when scout clearly found the wrong file or when\n    you need a second independent query.\n\nHow to interpret scout output:\n  [queries]   Search expansions derived from the question.\n  [files]     Candidate files, picked section ids, and nearby unread sections.\n  [focus]     Dominant file when the question appears single-file.\n  [highlights] Globally ranked lines/table rows likely to answer the question.\n  [evidence]  Bounded excerpts from the selected sections.\n\nQuestion-shape guidance:\n  - Current-vs-stale questions: prefer sections marked current/current loader;\n    treat Do Not Use, stale notes, copied tables, and old runbooks as distractors.\n  - Table questions: keep the table header with the selected row; do not average\n    unrelated rows unless the document says to.\n  - Why, policy, safety, privacy, negative, or tradeoff questions: include the\n    compact rule/risk/rationale bullets, not only the command or metric.\n  - Multi-file comparison: answer each named entity separately, then summarize\n    the shared pattern.\n  - Missing evidence: say the corpus does not specify the fact rather than\n    guessing from file names.\n\nUseful defaults:\n  --max-tokens 1400 keeps scout cheap for most agent turns.\n  --max-sections 12 gives enough diversity before packing.\n  --max-files 4 keeps the file map readable."
 )]
 struct ScoutArgs {
     /// File or directory to scout
     path: String,
     /// Natural-language question or retrieval goal
     question: String,
+    /// Output JSON (machine-readable with schema_version)
+    #[arg(long)]
+    json: bool,
     /// Approximate evidence-token budget (default: 1400)
     #[arg(long, default_value_t = 1400)]
     max_tokens: usize,
@@ -703,7 +706,7 @@ fn build_file_sections_map(results: &[crate::render::SearchResult]) -> FileSecti
     map
 }
 
-#[derive(Clone)]
+#[derive(Clone, Serialize)]
 struct ScoutCandidate {
     path: String,
     section_id: String,
@@ -825,7 +828,21 @@ fn cmd_scout(args: ScoutArgs) -> Result<()> {
         args.max_tokens,
     )?;
 
-    print!("{out}");
+    if args.json {
+        let output = ScoutJsonOutput {
+            schema_version: 1,
+            root: args.path,
+            question: args.question,
+            token_budget: args.max_tokens,
+            candidate_count: candidates.len(),
+            queries,
+            candidates: evidence_candidates,
+            rendered_text: out,
+        };
+        println!("{}", serde_json::to_string_pretty(&output)?);
+    } else {
+        print!("{out}");
+    }
     Ok(())
 }
 
@@ -3607,6 +3624,18 @@ struct SearchJsonSnippet {
     line_start: usize,
     line_end: usize,
     text: String,
+}
+
+#[derive(Serialize)]
+struct ScoutJsonOutput {
+    schema_version: u32,
+    root: String,
+    question: String,
+    token_budget: usize,
+    candidate_count: usize,
+    queries: Vec<String>,
+    candidates: Vec<ScoutCandidate>,
+    rendered_text: String,
 }
 
 #[derive(Serialize)]

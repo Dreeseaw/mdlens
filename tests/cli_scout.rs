@@ -44,3 +44,30 @@ fn scout_prioritizes_rule_risk_evidence_for_why_questions() {
         "rule/risk evidence should appear before metrics for why questions:\n{stdout}"
     );
 }
+
+#[test]
+fn scout_json_returns_structured_metadata_and_rendered_pack() {
+    let dir = tempdir().unwrap();
+    fs::write(
+        dir.path().join("policy.md"),
+        "# Policy\n\n## Current Rule\n\nUse --mode current because stale mode drops row labels.\n",
+    )
+    .unwrap();
+
+    let mut cmd = Command::cargo_bin("mdlens").unwrap();
+    cmd.arg("scout")
+        .arg(dir.path())
+        .arg("Which mode is current?")
+        .arg("--json");
+    cmd.assert().success();
+
+    let output = cmd.output().unwrap();
+    let stdout = String::from_utf8(output.stdout).unwrap();
+    let json: serde_json::Value = serde_json::from_str(&stdout).unwrap();
+
+    assert_eq!(json["schema_version"], 1);
+    assert_eq!(json["question"], "Which mode is current?");
+    assert!(json["queries"].is_array());
+    assert!(json["candidates"].is_array());
+    assert!(json["rendered_text"].as_str().unwrap().contains("[evidence]"));
+}

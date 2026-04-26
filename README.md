@@ -66,13 +66,15 @@ rg -nH "rate limit" docs/ | mdlens sections --preview 3 --max-sections 8
 ```
 
 All commands support `--json` for machine-readable output.
+For `scout`, JSON includes `schema_version`, query expansions, selected
+candidates, and the same rendered evidence pack in `rendered_text`.
 
 ## Evals
 
-These evals are mostly Markdown search and question-answering workflows, not a
-claim about general coding-agent performance. They measure whether agents answer
-from documentation with fewer irrelevant reads, fewer calls, lower cost, and
-better recall.
+Important caveat: this eval is entirely Markdown QA/search. It is not a claim
+about broad coding-agent performance, even though Markdown QA is a common part
+of coding-agent work. It measures whether agents answer from documentation with
+fewer irrelevant reads, fewer calls, lower cost, and better recall.
 
 ![Final Markdown QA eval matrix](docs/eval_matrix.svg)
 
@@ -80,10 +82,13 @@ Public eval notes and locked question sets live in [`evals/`](evals/). Corpora
 and raw model outputs are omitted from the public repo; the questions and
 methodology are included so readers can inspect the task shapes.
 
-The final combined eval used 30 hard questions over 1,783 Markdown files
-from three corpora: messy generated/scene Markdown, SciCat-style scientific
-documentation, and codebase docs. Five questions are workflow-like cross-corpus
-analysis tasks, but none require code edits.
+The final combined eval used 30 hard questions over 1,783 Markdown files from
+three corpora: messy generated/scene Markdown, a SciCat-style scientific README
+proxy, and codebase docs. Five questions are workflow-like cross-corpus analysis
+tasks, but none require code edits.
+
+Reproducibility dataset:
+[`dreeseaw/mdlens-combined-markdown-v1`](https://huggingface.co/datasets/dreeseaw/mdlens-combined-markdown-v1).
 
 Across the 15 harness/model pairs where both arms completed all rows:
 
@@ -115,9 +120,8 @@ Other eval families:
 - `messy_markdown_v1`: 500 carefully curated synthetic Markdown files with
   malformed formatting, stale/current contradictions, copied distractors,
   multi-needle tables, and cross-file policy/rationale questions.
-- `scicat_markdown_v1`: a scientific README/model-card proxy seeded from
-  published SciCat research metadata, with Hugging Face and GitHub scientific
-  Markdown fallback material.
+- `scicat_markdown_v1`: a SciCat-style scientific README proxy, with Hugging
+  Face and GitHub scientific Markdown fallback material.
 - `codebase_markdown_v1`: repository-doc navigation over real project docs,
   runbooks, design notes, and experiment reports.
 
