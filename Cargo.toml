@@ -1,6 +1,6 @@
 [package]
 name = "mdlens"
-version = "0.1.1"
+version = "0.1.2"
 edition = "2021"
 description = "Token-efficient Markdown structure CLI for agents"
 license = "MIT"
