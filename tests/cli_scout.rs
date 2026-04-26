@@ -69,5 +69,8 @@ fn scout_json_returns_structured_metadata_and_rendered_pack() {
     assert_eq!(json["question"], "Which mode is current?");
     assert!(json["queries"].is_array());
     assert!(json["candidates"].is_array());
-    assert!(json["rendered_text"].as_str().unwrap().contains("[evidence]"));
+    assert!(json["rendered_text"]
+        .as_str()
+        .unwrap()
+        .contains("[evidence]"));
 }
