@@ -1,0 +1,49 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="920" height="520" viewBox="0 0 920 520" role="img" aria-labelledby="title desc">
+  <title id="title">mdlens Markdown QA eval results</title>
+  <desc id="desc">Bar chart comparing baseline and mdlens success counts and reported cost on Markdown-only question answering evals.</desc>
+  <rect width="920" height="520" fill="#ffffff"/>
+  <text x="40" y="42" font-family="Arial, sans-serif" font-size="24" font-weight="700" fill="#14213d">mdlens improves Markdown QA retrieval</text>
+  <text x="40" y="70" font-family="Arial, sans-serif" font-size="14" fill="#4a5568">Nearly all eval tasks are documentation search / question answering, not full coding workflows.</text>
+
+  <line x1="70" y1="130" x2="870" y2="130" stroke="#edf2f7"/>
+  <line x1="70" y1="190" x2="870" y2="190" stroke="#edf2f7"/>
+  <line x1="70" y1="250" x2="870" y2="250" stroke="#edf2f7"/>
+  <line x1="70" y1="310" x2="870" y2="310" stroke="#edf2f7"/>
+  <line x1="70" y1="370" x2="870" y2="370" stroke="#edf2f7"/>
+
+  <text x="70" y="105" font-family="Arial, sans-serif" font-size="15" font-weight="700" fill="#1f2937">Successes out of 27</text>
+  <text x="548" y="105" font-family="Arial, sans-serif" font-size="15" font-weight="700" fill="#1f2937">Reported total cost</text>
+
+  <rect x="80" y="136" width="198" height="20" rx="4" fill="#6b7280"/>
+  <rect x="80" y="164" width="236" height="20" rx="4" fill="#0f766e"/>
+  <text x="330" y="153" font-family="Arial, sans-serif" font-size="13" fill="#1f2937">Pi + GPT-5.4: 21 -> 25</text>
+  <text x="330" y="181" font-family="Arial, sans-serif" font-size="13" fill="#0f766e">+4</text>
+
+  <rect x="80" y="216" width="227" height="20" rx="4" fill="#6b7280"/>
+  <rect x="80" y="244" width="236" height="20" rx="4" fill="#0f766e"/>
+  <text x="330" y="233" font-family="Arial, sans-serif" font-size="13" fill="#1f2937">opencode + GPT-5.4: 24 -> 25</text>
+  <text x="330" y="261" font-family="Arial, sans-serif" font-size="13" fill="#0f766e">+1</text>
+
+  <rect x="80" y="296" width="161" height="20" rx="4" fill="#6b7280"/>
+  <rect x="80" y="324" width="227" height="20" rx="4" fill="#0f766e"/>
+  <text x="330" y="313" font-family="Arial, sans-serif" font-size="13" fill="#1f2937">opencode + Sonnet 4.6: 17 -> 24</text>
+  <text x="330" y="341" font-family="Arial, sans-serif" font-size="13" fill="#0f766e">+7</text>
+
+  <rect x="560" y="136" width="259" height="20" rx="4" fill="#6b7280"/>
+  <rect x="560" y="164" width="56" height="20" rx="4" fill="#0f766e"/>
+  <text x="628" y="181" font-family="Arial, sans-serif" font-size="13" fill="#0f766e">$3.24 -> $0.70 (-78.5%)</text>
+
+  <rect x="560" y="216" width="200" height="20" rx="4" fill="#6b7280"/>
+  <rect x="560" y="244" width="76" height="20" rx="4" fill="#0f766e"/>
+  <text x="648" y="261" font-family="Arial, sans-serif" font-size="13" fill="#0f766e">$2.50 -> $0.95 (-61.9%)</text>
+
+  <rect x="560" y="296" width="174" height="20" rx="4" fill="#6b7280"/>
+  <rect x="560" y="324" width="73" height="20" rx="4" fill="#0f766e"/>
+  <text x="645" y="341" font-family="Arial, sans-serif" font-size="13" fill="#0f766e">$2.17 -> $0.91 (-57.9%)</text>
+
+  <rect x="80" y="410" width="16" height="16" rx="3" fill="#6b7280"/>
+  <text x="104" y="423" font-family="Arial, sans-serif" font-size="13" fill="#4a5568">baseline shell retrieval</text>
+  <rect x="260" y="410" width="16" height="16" rx="3" fill="#0f766e"/>
+  <text x="284" y="423" font-family="Arial, sans-serif" font-size="13" fill="#4a5568">mdlens scout workflow</text>
+  <text x="80" y="460" font-family="Arial, sans-serif" font-size="12" fill="#718096">Clean full-corpus runs only. Harness/provider failure rows are documented separately and excluded from this chart.</text>
+</svg>
