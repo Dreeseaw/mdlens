@@ -74,7 +74,7 @@ claim about general coding-agent performance. They measure whether agents answer
 from documentation with fewer irrelevant reads, fewer calls, lower cost, and
 better recall.
 
-![Final Markdown QA eval results](docs/eval_results.svg)
+![Final Markdown QA eval matrix](docs/eval_matrix.svg)
 
 Public eval notes and locked question sets live in [`evals/`](evals/). Corpora
 and raw model outputs are omitted from the public repo; the questions and
