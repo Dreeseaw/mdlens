@@ -7,6 +7,8 @@
 
 Token-efficient Markdown CLI for AI agents. Navigate, search, and pack docs into bounded context windows without reading files you don't need.
 
+`mdlens scout` is the recommended first call for agent question answering over arbitrary Markdown collections. It searches headings, paths, section bodies, parent context, and table rows, then returns a compact evidence pack with file maps, highlights, and bounded excerpts.
+
 ## Why
 
 When an AI agent needs to check a doc, the naive approach is to read the whole file. That works fine for a 50-line README. It falls apart fast with real documentation: multi-file references, long guides, rolling experiment logs. You burn context budget on sections that have nothing to do with the task at hand.
@@ -54,6 +56,24 @@ id=1.3.1  lines=115-142  tokens=163  matches=4
 ...
 ```
 
+```
+$ mdlens scout docs/ "Which configuration option controls authentication timeout?"
+[scout] question="Which configuration option controls authentication timeout?" budget=~1400t candidates=4
+[queries] configuration option | authentication timeout | timeout
+
+[files]
+- docs/guide.md
+  picked: §1.2 Configuration · §1.2.1 Environment variables
+  also: §1.1 Installation · §1.3 API Reference
+
+[highlights]
+- docs/guide.md §1.2.1 l64: `AUTH_TIMEOUT_SECONDS` controls token refresh and login timeout behavior.
+
+[evidence]
+--- docs/guide.md §1.2.1 Guide > Configuration > Environment variables l58-72 ~96t reason=lexical relevance: 3 query terms ---
+...
+```
+
 ## Commands
 
 | Command | What it does |
@@ -61,6 +81,7 @@ id=1.3.1  lines=115-142  tokens=163  matches=4
 | `tree`  | Show section hierarchy with token estimates for a file or directory |
 | `read`  | Extract a section by ID, heading path, or line range |
 | `search`| Find sections matching a keyword or regex across files |
+| `scout` | One-shot agent evidence pack for answering a natural-language question |
 | `pack`  | Bundle selected sections into a hard token budget |
 | `stats` | File-level sizes, word counts, and token estimates |
 | `sections` | Read file paths from stdin and list section metadata or bodies |
@@ -82,6 +103,9 @@ mdlens read docs/guide.md --id 1.2 --no-children
 
 # Search across a directory
 mdlens search docs/ "rate limit"
+
+# Best first call for agent QA over a Markdown directory
+mdlens scout docs/ "What does the guide recommend for rate limits?" --max-tokens 1400
 
 # Step 1: see section structure of grep hits (~zero overhead)
 grep -rl "rate limit" docs/ | mdlens sections --lines
@@ -120,6 +144,34 @@ In whole-file structure mode (`--lines`, or `--preview` without hit input), `mdl
 `mdlens sections --content` emits each section's direct body by default, so parent sections do not duplicate all descendant text. Add `--children` if you explicitly want subtree content repeated under the parent entry.
 
 `--max-files N` rejects the run if more than N files are piped in, so a stray `rg -l` over a large tree cannot accidentally dump megabytes of content. Recommended value for `--content` calls: `5`.
+
+## Agent harness integration
+
+For agent harnesses, plugins, `AGENTS.md`, `CLAUDE.md`, system prompts, or tool-router docs, add this exact minimal instruction:
+
+```text
+When answering questions over Markdown files or documentation directories, consider using `mdlens`.
+If `mdlens` is available and you need command guidance, run `mdlens --help` once.
+For question answering over a Markdown directory, prefer:
+  mdlens scout <dir> "<question>" --max-tokens 1400
+Answer from `[highlights]` and `[evidence]` when sufficient.
+If exactly one detail is missing, use the section map from `[files]`:
+  mdlens read <file> --id <section-id> --max-tokens 1200
+Avoid reading whole Markdown files unless scout clearly found the wrong file.
+Preserve exact short source terms such as flags, IDs, option names, metrics, table values, and policy phrases.
+```
+
+The detailed workflow lives in `mdlens --help` and `mdlens scout --help` so harness prompts can stay short. This is intentional: future agent harnesses can discover usage at runtime instead of baking a long tool manual into every task prompt.
+
+For direct use, the hot path is:
+
+```bash
+mdlens --help                         # optional, discover agent workflow
+mdlens scout docs/ "$QUESTION" --max-tokens 1400
+mdlens read docs/file.md --id 1.2 --max-tokens 1200  # only if scout leaves one detail missing
+```
+
+`scout` is designed for messy, general English Markdown, not only polished docs. It uses corpus-local lexical ranking, heading/path/body evidence, table-row context, parent heading/status context, source-authority conventions, and diversity/coverage selection for multi-file questions.
 
 ## Section IDs
 

@@ -93,7 +93,9 @@ pub fn render_search(
 ) -> String {
     let matched_ids_by_file: HashMap<&str, HashSet<&str>> =
         results.iter().fold(HashMap::new(), |mut acc, r| {
-            acc.entry(r.path.as_str()).or_default().insert(r.section_id.as_str());
+            acc.entry(r.path.as_str())
+                .or_default()
+                .insert(r.section_id.as_str());
             acc
         });
 
@@ -109,10 +111,8 @@ pub fn render_search(
         }
 
         // Show sidebar at the START of each file's first result (before content)
-        if file_changed {
-            if shown_sidebars.insert(result.path.as_str()) {
-                append_file_sidebar(&mut out, &result.path, file_sections, &matched_ids_by_file);
-            }
+        if file_changed && shown_sidebars.insert(result.path.as_str()) {
+            append_file_sidebar(&mut out, &result.path, file_sections, &matched_ids_by_file);
         }
         last_file = Some(result.path.as_str());
 
@@ -126,9 +126,6 @@ pub fn render_search(
             result.token_estimate,
             result.match_count,
         ));
-        for snippet in &result.snippets {
-            out.push_str(&format!("{}:{}\n", snippet.line_start, snippet.text));
-        }
 
         if with_content {
             if let Some(body) = &result.body {
@@ -141,12 +138,19 @@ pub fn render_search(
                 }
             }
         } else if let Some(preview) = &result.preview {
+            for snippet in &result.snippets {
+                out.push_str(&format!("{}:{}\n", snippet.line_start, snippet.text));
+            }
             if !preview.is_empty() {
                 out.push('\n');
                 out.push_str(preview);
                 if !preview.ends_with('\n') {
                     out.push('\n');
                 }
+            }
+        } else {
+            for snippet in &result.snippets {
+                out.push_str(&format!("{}:{}\n", snippet.line_start, snippet.text));
             }
         }
     }
@@ -160,13 +164,14 @@ fn append_file_sidebar(
     file_sections: &FileSectionsMap,
     matched_ids_by_file: &HashMap<&str, HashSet<&str>>,
 ) {
-    let Some(all_sections) = file_sections.get(file_path) else { return };
+    let Some(all_sections) = file_sections.get(file_path) else {
+        return;
+    };
     let matched = matched_ids_by_file.get(file_path);
     let others: Vec<String> = all_sections
         .iter()
         .filter(|(id, title)| {
-            title != "<preamble>"
-                && matched.map_or(true, |m| !m.contains(id.as_str()))
+            title != "<preamble>" && matched.is_none_or(|m| !m.contains(id.as_str()))
         })
         .map(|(id, title)| format!("§{} {}", id, title))
         .take(8)

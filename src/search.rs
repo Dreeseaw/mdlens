@@ -33,6 +33,27 @@ pub fn search_files(
         all_results.extend(results);
     }
 
+    // Agent queries are often natural phrases ("headline metric", "rank experiments")
+    // while docs may use nearby but non-identical wording. If an exact plain-text
+    // phrase has no hits, retry with query terms so the model gets a useful map
+    // instead of falling back to expensive whole-directory tree reads.
+    if all_results.is_empty() && !use_regex {
+        if let Some(token_pattern) = token_fallback_pattern(query) {
+            for file_path in &files {
+                let parsed = load_markdown(file_path)?;
+                let results = search_document(
+                    &parsed.doc,
+                    &parsed.lines,
+                    &token_pattern,
+                    case_sensitive,
+                    true,
+                    context_lines,
+                )?;
+                all_results.extend(results);
+            }
+        }
+    }
+
     all_results.sort_by(|lhs, rhs| {
         source_priority(&rhs.path)
             .cmp(&source_priority(&lhs.path))
@@ -46,6 +67,21 @@ pub fn search_files(
     });
 
     Ok(all_results.into_iter().take(max_results).collect())
+}
+
+fn token_fallback_pattern(query: &str) -> Option<String> {
+    let tokens: Vec<String> = query
+        .split(|c: char| !c.is_ascii_alphanumeric() && c != '_' && c != '-')
+        .map(str::trim)
+        .filter(|token| token.len() >= 3)
+        .map(regex::escape)
+        .collect();
+
+    if tokens.len() < 2 {
+        return None;
+    }
+
+    Some(tokens.join("|"))
 }
 
 /// Search within a single document.
@@ -186,13 +222,40 @@ fn source_priority(path: &str) -> i32 {
         .unwrap_or(path);
 
     let mut score = 0i32;
-    // Champion docs are the highest-priority source-of-truth by convention
-    if stem_lower.ends_with("_champion") || file == "champion.md" {
-        score += 120;
+    // Files named like source docs should beat scratchpads with many repeated
+    // keyword hits. This is intentionally convention-based, not eval-specific:
+    // real markdown trees often have policies/specs/runbooks plus noisy notes.
+    for marker in [
+        "policy",
+        "runbook",
+        "guide",
+        "manual",
+        "spec",
+        "reference",
+        "card",
+        "schema",
+        "protocol",
+    ] {
+        if stem_lower.contains(marker) {
+            score += 45;
+        }
     }
-    // State/status tracking docs are the current authoritative record
-    if stem_lower.ends_with("_state") || stem_lower.ends_with("_status") || file == "state.md" || file == "status.md" {
+    // State/status tracking docs are often the current authoritative record.
+    if stem_lower.ends_with("_state")
+        || stem_lower.ends_with("_status")
+        || stem_lower.ends_with("_current")
+        || file == "state.md"
+        || file == "status.md"
+        || file == "current.md"
+    {
         score += 110;
+    }
+    if stem_lower.contains("canonical")
+        || stem_lower.contains("source_of_truth")
+        || stem_lower.contains("source-of-truth")
+        || stem_lower.contains("authoritative")
+    {
+        score += 105;
     }
     // Numbered intro docs: 00_ is typically the orientation/index
     if file.starts_with("00_") {
@@ -203,8 +266,27 @@ fn source_priority(path: &str) -> i32 {
         score += 90;
     }
     // Named overview/orientation/readme files are canonical entry points
-    if stem_lower.contains("orientation") || stem_lower.contains("overview") || stem_lower.contains("readme") || stem_lower.contains("getting_started") {
+    if stem_lower.contains("orientation")
+        || stem_lower.contains("overview")
+        || stem_lower.contains("readme")
+        || stem_lower.contains("getting_started")
+        || stem_lower.contains("roadmap")
+    {
         score += 85;
+    }
+    // Chat logs and informal discussion files are useful color, not source of truth.
+    if stem_lower.contains("chat")
+        || stem_lower.contains("discussion")
+        || stem_lower.contains("conversation")
+        || stem_lower.contains("scratch")
+        || stem_lower.contains("tmp")
+        || stem_lower.contains("temp")
+        || stem_lower.contains("draft")
+        || stem_lower.contains("random")
+        || stem_lower.contains("copied")
+        || stem_lower.contains("copy")
+    {
+        score -= 180;
     }
     // All-uppercase stems (e.g. README, TRACKER, SPEC) are convention for important docs
     if is_all_caps_stem(stem_orig) {
@@ -227,12 +309,16 @@ fn is_canonical_doc_path(path: &str) -> bool {
         .and_then(|name| name.to_str())
         .unwrap_or(path)
         .to_ascii_lowercase();
-    stem_lower.ends_with("_champion")
-        || file == "champion.md"
-        || stem_lower.ends_with("_state")
+    stem_lower.ends_with("_state")
         || stem_lower.ends_with("_status")
+        || stem_lower.ends_with("_current")
         || file == "state.md"
         || file == "status.md"
+        || file == "current.md"
+        || stem_lower.contains("canonical")
+        || stem_lower.contains("source_of_truth")
+        || stem_lower.contains("source-of-truth")
+        || stem_lower.contains("authoritative")
         || file.starts_with("00_")
         || file.starts_with("01_")
         || stem_lower.contains("orientation")
@@ -241,7 +327,10 @@ fn is_canonical_doc_path(path: &str) -> bool {
 }
 
 fn is_all_caps_stem(stem: &str) -> bool {
-    !stem.is_empty() && stem.chars().all(|c| c.is_ascii_uppercase() || c == '_' || c.is_ascii_digit())
+    !stem.is_empty()
+        && stem
+            .chars()
+            .all(|c| c.is_ascii_uppercase() || c == '_' || c.is_ascii_digit())
 }
 
 fn section_priority(path: &[String]) -> i32 {
@@ -249,17 +338,27 @@ fn section_priority(path: &[String]) -> i32 {
     let mut score = 0i32;
     for marker in [
         "source of truth",
-        "current champion",
-        "champion",
-        "active hypotheses",
-        "benchmark protocol",
+        "current state",
+        "current status",
+        "authoritative",
+        "canonical",
+        "protocol",
         "metric",
         "formula",
+        "current loader",
+        "do not use",
+        "policy",
+        "privacy policy",
+        "annotation policy",
+        "counting rule",
+        "safety read",
+        "known risk",
+        "risk",
+        "rule",
         "overview",
         "summary",
         "key",
-        // Synthesis / conclusion sections that often contain the decisive finding
-        "strategic read",
+        // Synthesis / conclusion sections that often contain the decisive finding.
         "interpretation",
         "what this means",
         "what we learned",
@@ -267,6 +366,9 @@ fn section_priority(path: &[String]) -> i32 {
         "findings",
         "key results",
         "key finding",
+        "direction",
+        "roadmap",
+        "recommendation",
     ] {
         if joined.contains(marker) {
             score += 12;
@@ -298,27 +400,64 @@ fn is_dated_doc(file_name: &str) -> bool {
         || file_name.contains("2023-")
 }
 
-/// Returns (id, title) summaries for direct subsections (depth=1) of each root section.
-/// Skips root sections (depth=0) since they just repeat the file name.
+/// Returns high-value section summaries for sidebar navigation.
+///
+/// Sidebars are most useful when they expose exact read targets like "Formula",
+/// "Run-Level Quality Score", or "Current Champion", even if those sections are
+/// nested later in a long document. Ranking all sections beats listing only the
+/// first few top-level headings for agent navigation.
 pub fn get_doc_section_summaries(path: &str) -> Result<Vec<(String, String)>> {
     let parsed = load_markdown(path)?;
     let mut summaries = Vec::new();
-    for root in &parsed.doc.sections {
-        if root.title == "<preamble>" {
-            continue;
-        }
-        // Only collect direct children (depth=1), not nested subsections
-        for child in &root.children {
-            if child.title != "<preamble>" {
-                summaries.push((child.id.clone(), child.title.clone()));
-            }
-        }
-        // If there are no children, include the root section itself
-        if root.children.is_empty() {
-            summaries.push((root.id.clone(), root.title.clone()));
-        }
-    }
+    collect_summary_sections(&parsed.doc.sections, &mut summaries);
+    summaries.sort_by(|lhs, rhs| {
+        section_priority(&rhs.2)
+            .cmp(&section_priority(&lhs.2))
+            .then(lhs.2.len().cmp(&rhs.2.len()))
+            .then(compare_section_ids(&lhs.0, &rhs.0))
+    });
+    let summaries = summaries
+        .into_iter()
+        .map(|(id, title, path)| {
+            let label = if path.len() > 2 {
+                path[(path.len() - 2)..].join(" > ")
+            } else if path.len() > 1 {
+                path.last().cloned().unwrap_or(title)
+            } else {
+                title
+            };
+            (id, label)
+        })
+        .collect();
     Ok(summaries)
+}
+
+fn collect_summary_sections(
+    sections: &[Section],
+    summaries: &mut Vec<(String, String, Vec<String>)>,
+) {
+    for section in sections {
+        if section.title != "<preamble>" {
+            summaries.push((
+                section.id.clone(),
+                section.title.clone(),
+                section.path.clone(),
+            ));
+        }
+        collect_summary_sections(&section.children, summaries);
+    }
+}
+
+fn compare_section_ids(lhs: &str, rhs: &str) -> std::cmp::Ordering {
+    let lhs_parts = parse_section_id(lhs);
+    let rhs_parts = parse_section_id(rhs);
+    lhs_parts.cmp(&rhs_parts).then(lhs.cmp(rhs))
+}
+
+fn parse_section_id(id: &str) -> Vec<usize> {
+    id.split('.')
+        .filter_map(|part| part.parse::<usize>().ok())
+        .collect()
 }
 
 /// Discover markdown files in a directory or return a single file.
@@ -362,12 +501,15 @@ pub fn discover_markdown_files_with_mode(root: &str, canonical_only: bool) -> Re
 
 #[cfg(test)]
 mod tests {
-    use super::{is_canonical_doc_path, is_dated_doc, section_priority, source_priority};
+    use super::{
+        is_canonical_doc_path, is_dated_doc, section_priority, source_priority,
+        token_fallback_pattern,
+    };
 
     #[test]
     fn source_priority_prefers_canonical_docs() {
         assert!(
-            source_priority("docs/PROJECT_CHAMPION.md")
+            source_priority("docs/SOURCE_OF_TRUTH.md")
                 > source_priority("docs/124_analysis_2026-04-06.md")
         );
         assert!(
@@ -378,13 +520,14 @@ mod tests {
             source_priority("docs/00_orientation.md")
                 > source_priority("docs/55_archived_experiment.md")
         );
+        assert!(source_priority("docs/roadmap.md") > source_priority("docs/team_chat.md"));
     }
 
     #[test]
     fn dated_docs_are_penalized() {
         assert!(is_dated_doc("124_analysis_2026-04-06.md"));
         assert!(is_dated_doc("notes_2025-11-01.md"));
-        assert!(!is_dated_doc("PROJECT_CHAMPION.md"));
+        assert!(!is_dated_doc("SOURCE_OF_TRUTH.md"));
         assert!(!is_dated_doc("00_orientation.md"));
     }
 
@@ -397,14 +540,24 @@ mod tests {
 
     #[test]
     fn canonical_doc_filter_prefers_source_of_truth_docs() {
-        assert!(is_canonical_doc_path("docs/PROJECT_CHAMPION.md"));
+        assert!(is_canonical_doc_path("docs/SOURCE_OF_TRUTH.md"));
+        assert!(is_canonical_doc_path("docs/canonical_policy.md"));
         assert!(is_canonical_doc_path("docs/CURRENT_STATE.md"));
+        assert!(is_canonical_doc_path("docs/current.md"));
         assert!(is_canonical_doc_path("docs/01_benchmark_protocol.md"));
         assert!(is_canonical_doc_path("docs/00_orientation.md"));
         assert!(is_canonical_doc_path("docs/README.md"));
-        assert!(!is_canonical_doc_path(
-            "docs/124_analysis_2026-04-06.md"
-        ));
+        assert!(!is_canonical_doc_path("docs/124_analysis_2026-04-06.md"));
         assert!(!is_canonical_doc_path("docs/55_archived_run.md"));
+    }
+
+    #[test]
+    fn token_fallback_requires_multiword_plain_queries() {
+        assert_eq!(
+            token_fallback_pattern("headline metric").as_deref(),
+            Some("headline|metric")
+        );
+        assert_eq!(token_fallback_pattern("metric"), None);
+        assert_eq!(token_fallback_pattern("to be").as_deref(), None);
     }
 }

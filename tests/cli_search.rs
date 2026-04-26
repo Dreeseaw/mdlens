@@ -131,7 +131,7 @@ fn search_with_content_and_json() {
 
 #[test]
 fn search_returns_results_sorted_by_source_priority() {
-    // Results from canonical-named files (e.g. *_champion, *_state) should appear
+    // Results from canonical-named files (e.g. *_state, source_of_truth) should appear
     // before dated-sequence files even without an explicit filter flag.
     let mut cmd = Command::cargo_bin("mdlens").unwrap();
     cmd.arg("search")

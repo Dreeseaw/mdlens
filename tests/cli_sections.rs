@@ -143,7 +143,7 @@ fn sections_max_tokens() {
         "command should succeed: stderr={stderr}"
     );
     assert!(
-        stderr.contains("sections omitted") || output.stdout.len() > 0,
+        stderr.contains("sections omitted") || !output.stdout.is_empty(),
         "Expected warning about omitted sections, got stderr: {}",
         stderr
     );
