@@ -15,8 +15,6 @@ When an AI agent needs to check a doc, the naive approach is to read the whole f
 
 `mdlens` gives agents a structured view of Markdown with section hierarchy, token estimates, and targeted extraction. Read only what matters.
 
-> **Token savings vs. raw `cat`:** *(benchmarks in progress, will update)*
-
 ## Demo
 
 ```
@@ -172,6 +170,14 @@ mdlens read docs/file.md --id 1.2 --max-tokens 1200  # only if scout leaves one 
 ```
 
 `scout` is designed for messy, general English Markdown, not only polished docs. It uses corpus-local lexical ranking, heading/path/body evidence, table-row context, parent heading/status context, source-authority conventions, and diversity/coverage selection for multi-file questions.
+
+## Evaluations
+
+Public eval notes and locked question sets live in [`evals/`](evals/). The generated corpora and model outputs are not included in this repository, but the question set and methodology are included so readers can see the task shapes.
+
+The main messy-Markdown eval compared raw shell retrieval against the `mdlens scout` workflow on 500 generated Markdown files with stale notes, malformed tables, copied distractors, current-vs-stale config sections, and multi-file policy/rationale questions. Internal runs tracked success, keyword recall, tool calls, elapsed time, token telemetry, and available cost telemetry across Pi, opencode, native Claude CLI, and native Codex CLI.
+
+A planned follow-up is a five-task mock workflow eval with fresh branches. Each task should combine Markdown analysis, a small code change, and JSON/data inspection to measure whether `mdlens` helps agents complete real repository work, not just answer retrieval questions.
 
 ## Section IDs
 

@@ -1,0 +1,8 @@
+{
+  "name": "mdlens",
+  "description": "Token-efficient Markdown retrieval for AI agents. Prefer `mdlens scout` for question answering over Markdown directories, then `mdlens read` for one missing section detail.",
+  "author": {
+    "name": "Dreeseaw",
+    "url": "https://github.com/Dreeseaw"
+  }
+}
