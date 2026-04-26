@@ -11,6 +11,37 @@ measure whether agents can answer from documentation with fewer irrelevant reads
 fewer calls, lower cost, and better recall. They are not a broad benchmark of
 general coding-agent performance.
 
+## `combined_markdown_v1`
+
+The v1 headline eval combines all three corpora below into one larger Markdown
+collection: 1,783 files and 17.0 MB of source text. The locked question set has
+30 hard questions:
+
+- 10 from `messy_markdown_v1`
+- 8 from `scicat_markdown_v1`
+- 7 from `codebase_markdown_v1`
+- 5 new workflow-like cross-corpus questions
+
+The workflow-like questions ask for cross-document analysis over Markdown and
+adjacent structured facts, but still require no code edits. This keeps the eval
+focused on Markdown retrieval while being closer to the analysis tasks agents
+actually do in repositories.
+
+Headline result across 15 harness/model pairs where both arms completed all
+rows:
+
+| metric | baseline shell retrieval | mdlens scout workflow |
+|---|---:|---:|
+| average success | 19.7/30 | 22.7/30 |
+| average tool calls | 7.5 | 2.6 |
+| average reported cost, priced pairs | $2.41 | $0.93 |
+
+The public repo includes only `questions.jsonl`. Local reports used for the v1
+README also covered Codex, opencode, Pi, and Claude harnesses over GPT-5.4,
+Sonnet 4.6, GPT-5.4 Mini, Haiku 4.5, Kimi K2.6, GLM 5.1, and Qwen 3.6 Plus.
+Native Claude Sonnet produced partial provider/credit failures late in the run,
+so the headline aggregate excludes partial harness/model pairs.
+
 ## `messy_markdown_v1`
 
 The headline eval used 500 carefully curated synthetic Markdown files, about
@@ -33,7 +64,7 @@ The main comparison was raw shell retrieval versus the `mdlens` workflow:
 - mdlens: first call should be `mdlens scout <dir> "<question>" --max-tokens 1400`;
   follow up with `mdlens read` only when one exact section detail is missing
 
-Final clean full-corpus runs:
+Earlier clean full-corpus runs:
 
 | harness/model | baseline | mdlens | delta |
 |---|---:|---:|---:|

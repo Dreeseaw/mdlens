@@ -80,13 +80,35 @@ Public eval notes and locked question sets live in [`evals/`](evals/). Corpora
 and raw model outputs are omitted from the public repo; the questions and
 methodology are included so readers can inspect the task shapes.
 
-The final clean full-corpus runs:
+The final combined eval used 30 hard questions over 1,783 Markdown files
+from three corpora: messy generated/scene Markdown, SciCat-style scientific
+documentation, and codebase docs. Five questions are workflow-like cross-corpus
+analysis tasks, but none require code edits.
 
-| harness/model | baseline | mdlens | delta |
+Across the 15 harness/model pairs where both arms completed all rows:
+
+| metric | baseline shell retrieval | mdlens scout workflow |
+|---|---:|---:|
+| average success | 19.7/30 | 22.7/30 |
+| average tool calls | 7.5 | 2.6 |
+| average reported cost, priced pairs | $2.41 | $0.93 |
+
+Selected full runs:
+
+| harness/model | baseline | mdlens | cost |
 |---|---:|---:|---:|
-| Pi + GPT-5.4 | 21/27, $3.2362 | 25/27, $0.6972 | +4 success, -78.5% cost |
-| opencode + GPT-5.4 | 24/27, $2.4994 | 25/27, $0.9525 | +1 success, -61.9% cost |
-| opencode + Sonnet 4.6 | 17/27, $2.1692 | 24/27, $0.9136 | +7 success, -57.9% cost |
+| Codex + GPT-5.4 | 17/30 | 24/30 | n/a |
+| opencode + GPT-5.4 | 18/30 | 24/30 | $3.08 -> $0.97 |
+| Pi + GPT-5.4 | 21/30 | 25/30 | $3.64 -> $1.51 |
+| opencode + Sonnet 4.6 | 20/30 | 24/30 | $2.54 -> $1.46 |
+| Pi + Sonnet 4.6 | 20/30 | 24/30 | $3.51 -> $2.23 |
+| Pi + GLM 5.1 | 23/30 | 26/30 | $1.98 -> $0.85 |
+| opencode + Kimi K2.6 | 18/30 | 20/30 | $5.19 -> $0.81 |
+| opencode + Qwen 3.6 Plus | 22/30 | 24/30 | $0.45 -> $0.24 |
+
+Native Claude rows are documented in the local reports, but the Sonnet run hit
+provider/credit `exit_1` failures late in the run and is treated as partial
+harness data rather than a clean model comparison.
 
 Other eval families:
 
