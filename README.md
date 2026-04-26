@@ -133,6 +133,21 @@ inspection in a fresh branch.
 
 Requires Rust 1.70+.
 
+With Homebrew:
+
+```bash
+brew install Dreeseaw/tap/mdlens
+```
+
+Or:
+
+```bash
+brew tap Dreeseaw/tap
+brew install mdlens
+```
+
+With Cargo:
+
 ```bash
 cargo install mdlens
 ```
