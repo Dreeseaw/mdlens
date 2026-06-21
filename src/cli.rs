@@ -2732,6 +2732,18 @@ fn scout_section_content(
     question: &str,
     max_tokens: usize,
 ) -> (String, bool) {
+    // Deterministic "contextual retrieval" breadcrumb: an explicit heading-
+    // ancestry path so the consuming model has disambiguating context for the
+    // excerpt at near-zero token cost (the ancestor headings, not their bodies).
+    let breadcrumb = scout_breadcrumb(section);
+    let prefix = |body: &str| -> String {
+        if breadcrumb.is_empty() {
+            body.to_string()
+        } else {
+            format!("{breadcrumb}\n{body}")
+        }
+    };
+
     let parent_context = scout_parent_context(ancestors, lines, max_tokens.min(220));
     let content_lines = section.extract_content(lines);
     let full = content_lines.join("\n");
@@ -2740,26 +2752,41 @@ fn scout_section_content(
     } else {
         format!("{parent_context}\n...\n{full}")
     };
-    let full_tokens = estimate_tokens(&full_with_context);
+    let full_tokens = estimate_tokens(&prefix(&full_with_context));
     if full_tokens <= max_tokens {
-        return (full_with_context, false);
+        return (prefix(&full_with_context), false);
     }
 
     let focused_budget = max_tokens
         .saturating_sub(estimate_tokens(&parent_context))
+        .saturating_sub(estimate_tokens(&breadcrumb))
         .max(max_tokens / 2);
     let focused = scout_focused_excerpt(content_lines, question, focused_budget);
     if !focused.trim().is_empty() {
         if parent_context.trim().is_empty() {
-            return (focused, true);
+            return (prefix(&focused), true);
         }
-        return (format!("{parent_context}\n...\n{focused}"), true);
+        return (prefix(&format!("{parent_context}\n...\n{focused}")), true);
     }
 
     (
-        truncate_to_tokens(&full_with_context, max_tokens, TRUNCATION_NOTICE),
+        prefix(&truncate_to_tokens(
+            &full_with_context,
+            max_tokens.saturating_sub(estimate_tokens(&breadcrumb)),
+            TRUNCATION_NOTICE,
+        )),
         true,
     )
+}
+
+/// Concise heading-ancestry breadcrumb for an emitted section, e.g.
+/// `> Installation > From source`. Returns an empty string for top-level
+/// sections with no meaningful ancestry to add.
+fn scout_breadcrumb(section: &Section) -> String {
+    if section.path.len() < 2 {
+        return String::new();
+    }
+    format!("> {}", section.path.join(" > "))
 }
 
 fn section_ancestors<'a>(sections: &'a [Section], target_id: &str) -> Vec<&'a Section> {
