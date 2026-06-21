@@ -52,6 +52,7 @@ use anyhow::Result;
 
 pub mod cli;
 pub mod errors;
+pub mod init;
 pub mod model;
 pub mod pack;
 pub mod parse;

@@ -23,22 +23,21 @@ experiment logs, tables, stale notes, and multi-file policy docs.
 
 ## Agent Integration
 
-For `AGENTS.md`, `CLAUDE.md`, plugin docs, system prompts, or tool routers, add:
+Run `mdlens init` to wire mdlens guidance into your AI coding harness. It writes a
+small, idempotent instruction block into the files your tools already read
+(`CLAUDE.md`, `AGENTS.md`, etc.), so you don't paste anything by hand.
 
-```text
-When answering questions over Markdown files or documentation directories, consider using `mdlens`.
-If `mdlens` is available and you need command guidance, run `mdlens --help` once.
-For question answering over a Markdown directory, prefer:
-  mdlens scout <dir> "<question>" --max-tokens 1400
-Answer from `[highlights]` and `[evidence]` when sufficient.
-If exactly one detail is missing, use the section map from `[files]`:
-  mdlens read <file> --id <section-id> --max-tokens 1200
-Avoid reading whole Markdown files unless scout clearly found the wrong file.
-Preserve exact short source terms such as flags, IDs, option names, metrics, table values, and policy phrases.
+```bash
+mdlens init                       # project files in the current dir (CLAUDE.md + AGENTS.md)
+mdlens init -g                    # user-level config (e.g. ~/.claude/CLAUDE.md)
+mdlens init --gemini --cursor     # pick specific harnesses
+mdlens init --dry-run             # preview without writing
 ```
 
-Detailed guidance lives in `mdlens --help` and `mdlens scout --help`, so harness
-prompts can stay short while future agents can still discover the workflow.
+Re-running `init` updates the block in place (it is managed by mdlens — keep any
+of your own edits outside the mdlens markers). Detailed guidance lives in
+`mdlens --help` and `mdlens scout --help`, so harness prompts stay short while
+future agents can still discover the workflow.
 
 ## Commands
 

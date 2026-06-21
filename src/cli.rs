@@ -47,6 +47,8 @@ enum Commands {
     Stats(StatsArgs),
     /// Read file paths from stdin and output structured section metadata
     Sections(SectionsArgs),
+    /// Wire mdlens guidance into AI coding harnesses (CLAUDE.md, AGENTS.md, ...)
+    Init(InitArgs),
 }
 
 #[derive(clap::Args)]
@@ -262,6 +264,37 @@ struct SectionsArgs {
     no_dedupe: bool,
 }
 
+#[derive(clap::Args)]
+struct InitArgs {
+    /// Write to user-level config files (e.g. ~/.claude/CLAUDE.md) instead of the project
+    #[arg(long, short = 'g')]
+    global: bool,
+    /// Wire into Claude Code (CLAUDE.md)
+    #[arg(long)]
+    claude: bool,
+    /// Wire into Codex / AGENTS.md (also covers opencode)
+    #[arg(long)]
+    codex: bool,
+    /// Wire into Gemini CLI (GEMINI.md)
+    #[arg(long)]
+    gemini: bool,
+    /// Wire into GitHub Copilot (.github/copilot-instructions.md)
+    #[arg(long)]
+    copilot: bool,
+    /// Wire into Cursor (.cursor/rules/mdlens.md)
+    #[arg(long)]
+    cursor: bool,
+    /// Select a harness by name: claude, codex, gemini, copilot, cursor (repeatable)
+    #[arg(long, value_name = "NAME")]
+    agent: Vec<String>,
+    /// Project root to write into (default: current directory)
+    #[arg(long, default_value = ".")]
+    path: String,
+    /// Show what would change without writing
+    #[arg(long)]
+    dry_run: bool,
+}
+
 #[derive(Clone)]
 struct SectionHit {
     path: String,
@@ -284,7 +317,84 @@ pub fn run() -> Result<()> {
         Commands::Pack(args) => cmd_pack(args),
         Commands::Stats(args) => cmd_stats(args),
         Commands::Sections(args) => cmd_sections(args),
+        Commands::Init(args) => cmd_init(args),
     }
+}
+
+fn cmd_init(args: InitArgs) -> Result<()> {
+    use crate::init::{self, Change, Harness};
+
+    // Collect explicitly-selected harnesses from both flag and --agent forms.
+    let mut selected: Vec<Harness> = Vec::new();
+    let push = |h: Harness, v: &mut Vec<Harness>| {
+        if !v.contains(&h) {
+            v.push(h);
+        }
+    };
+    if args.claude {
+        push(Harness::Claude, &mut selected);
+    }
+    if args.codex {
+        push(Harness::Codex, &mut selected);
+    }
+    if args.gemini {
+        push(Harness::Gemini, &mut selected);
+    }
+    if args.copilot {
+        push(Harness::Copilot, &mut selected);
+    }
+    if args.cursor {
+        push(Harness::Cursor, &mut selected);
+    }
+    for name in &args.agent {
+        match Harness::from_name(name) {
+            Some(h) => push(h, &mut selected),
+            None => {
+                return Err(anyhow::anyhow!(
+                    "unknown harness '{}' (expected: claude, codex, gemini, copilot, cursor)",
+                    name
+                ))
+            }
+        }
+    }
+    if selected.is_empty() {
+        selected = init::default_harnesses();
+    }
+
+    let root = std::path::PathBuf::from(&args.path);
+    let outcomes = init::run_init(&selected, args.global, args.dry_run, root)?;
+
+    if args.dry_run {
+        println!("mdlens init (dry run — no files written)");
+    } else {
+        println!("mdlens init");
+    }
+    for o in &outcomes {
+        let target = o
+            .path
+            .as_ref()
+            .map(|p| p.display().to_string())
+            .unwrap_or_else(|| "(no global config — run without -g for this harness)".to_string());
+        let status = match o.change {
+            Change::Created => "created",
+            Change::UpdatedBlock => "updated",
+            Change::AlreadyCurrent => "up to date",
+            Change::SkippedNoGlobal => "skipped",
+        };
+        println!("  [{}] {}  ->  {}", status, o.harness.label(), target);
+    }
+
+    // If everything was skipped (e.g. `init -g --cursor`), nothing was done —
+    // surface that as an error rather than a silent success.
+    if outcomes
+        .iter()
+        .all(|o| matches!(o.change, Change::SkippedNoGlobal))
+    {
+        return Err(anyhow::anyhow!(
+            "nothing to do: the selected harness(es) have no global config file — re-run without -g"
+        ));
+    }
+    Ok(())
 }
 
 fn cmd_tree(args: TreeArgs) -> Result<()> {
