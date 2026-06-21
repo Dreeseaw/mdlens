@@ -49,6 +49,8 @@ enum Commands {
     Sections(SectionsArgs),
     /// Wire mdlens guidance into AI coding harnesses (CLAUDE.md, AGENTS.md, ...)
     Init(InitArgs),
+    /// Show accumulated token savings from scout/read usage
+    Gain(GainArgs),
 }
 
 #[derive(clap::Args)]
@@ -295,6 +297,16 @@ struct InitArgs {
     dry_run: bool,
 }
 
+#[derive(clap::Args)]
+struct GainArgs {
+    /// Output JSON (machine-readable with schema_version)
+    #[arg(long)]
+    json: bool,
+    /// Reset accumulated savings history to zero
+    #[arg(long)]
+    reset: bool,
+}
+
 #[derive(Clone)]
 struct SectionHit {
     path: String,
@@ -318,7 +330,12 @@ pub fn run() -> Result<()> {
         Commands::Stats(args) => cmd_stats(args),
         Commands::Sections(args) => cmd_sections(args),
         Commands::Init(args) => cmd_init(args),
+        Commands::Gain(args) => cmd_gain(args),
     }
+}
+
+fn cmd_gain(args: GainArgs) -> Result<()> {
+    crate::gain::run_gain(args.json, args.reset)
 }
 
 fn cmd_init(args: InitArgs) -> Result<()> {
@@ -583,6 +600,9 @@ fn cmd_read(args: ReadArgs) -> Result<()> {
     } else {
         false
     };
+
+    // Record savings: full file (baseline) vs the section we return.
+    crate::gain::record("read", doc.token_estimate, estimate_tokens(&full_content));
 
     if args.json {
         let output = ReadJsonOutput {
@@ -937,6 +957,19 @@ fn cmd_scout(args: ScoutArgs) -> Result<()> {
         &args.question,
         args.max_tokens,
     )?;
+
+    // Record savings: full text of the distinct files scout pulled evidence
+    // from (baseline the agent would otherwise read) vs the bounded pack.
+    let mut seen_files = HashSet::new();
+    let mut baseline_tokens = 0usize;
+    for candidate in &evidence_candidates {
+        if seen_files.insert(candidate.path.clone()) {
+            if let Ok(doc) = parse_markdown(&candidate.path) {
+                baseline_tokens += doc.token_estimate;
+            }
+        }
+    }
+    crate::gain::record("scout", baseline_tokens, estimate_tokens(&out));
 
     if args.json {
         let output = ScoutJsonOutput {
