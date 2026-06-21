@@ -2764,7 +2764,14 @@ fn render_scout_evidence(
     // Tail-aware cutoff: filter low-relevance tail candidates by score floor
     // derived from the score distribution. NOT a positional break — the input
     // order is non-monotonic, so we gate per-candidate by score instead.
-    let score_floor = scout_adaptive_score_floor(candidates);
+    // Skip the cutoff for comparative/multi-file questions, where a low-scored
+    // section can be the sole evidence for one entity and the global floor can't
+    // see per-file need. Otherwise trim the low-relevance tail (distractors).
+    let score_floor = if wants_multi_file_evidence(question) {
+        i32::MIN
+    } else {
+        scout_adaptive_score_floor(candidates)
+    };
     let mut tail_cut = 0usize;
     for candidate in candidates {
         if total_tokens >= max_tokens {
