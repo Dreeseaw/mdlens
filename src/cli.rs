@@ -1712,6 +1712,10 @@ fn add_neighbor_candidates(candidates: &mut Vec<ScoutCandidate>) -> Result<()> {
             .or_default()
             .insert(candidate.section_id.clone());
     }
+    // Deterministic iteration: HashMap order is unspecified, so sort by path.
+    // (Downstream sorting currently masks this, but relying on that is fragile.)
+    let mut by_file: Vec<(String, HashSet<String>)> = by_file.into_iter().collect();
+    by_file.sort_by(|a, b| a.0.cmp(&b.0));
     for (path, ids) in by_file {
         let parsed = load_markdown(&path)?;
         let flat = flatten_doc_sections(&parsed.doc.sections);
