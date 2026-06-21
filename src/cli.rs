@@ -2642,6 +2642,7 @@ fn render_scout_evidence(
     baseline_out: &mut usize,
 ) -> Result<()> {
     let mut total_tokens = 0usize;
+    let mut emitted_sigs: Vec<HashSet<String>> = Vec::new();
     let mut cache: HashMap<String, crate::parse::ParsedMarkdown> = HashMap::new();
     let mut emitted_ranges: HashMap<String, Vec<(usize, usize)>> = HashMap::new();
     let question_l = question.to_ascii_lowercase();
@@ -2677,6 +2678,26 @@ fn render_scout_evidence(
         if emitted_tokens == 0 {
             continue;
         }
+        // MMR: skip a section that near-duplicates one already emitted (e.g. a
+        // block copied across files), reinvesting the budget in new evidence.
+        // The size floor avoids false-positive dedup on tiny sections that share
+        // a couple of long tokens.
+        let sig: HashSet<String> = content
+            .split_whitespace()
+            .filter(|w| w.len() >= 4)
+            .map(|w| w.to_ascii_lowercase())
+            .collect();
+        if sig.len() >= 12
+            && emitted_sigs.iter().any(|e| {
+                let inter = sig.intersection(e).count();
+                let uni = (sig.len() + e.len()).saturating_sub(inter).max(1);
+                inter as f64 / uni as f64 > 0.6
+            })
+        {
+            // Signal the omission so the agent knows the pack was de-duplicated.
+            out.push_str("\n<!-- mdlens: omitted a near-duplicate section -->\n");
+            continue;
+        }
         out.push_str(&format!(
             "\n--- {} §{} {} l{}-{} ~{}t reason={} ---\n",
             candidate.path,
@@ -2693,6 +2714,7 @@ fn render_scout_evidence(
         }
         ranges.push((section.line_start, section.line_end));
         total_tokens += emitted_tokens;
+        emitted_sigs.push(sig);
         if truncated {
             continue;
         }
