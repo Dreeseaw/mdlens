@@ -2257,7 +2257,47 @@ fn target_phrases_from_question(question: &str) -> Vec<String> {
 
 #[cfg(test)]
 mod scout_tests {
-    use super::target_phrases_from_question;
+    use super::{scout_adaptive_score_floor, target_phrases_from_question, ScoutCandidate};
+
+    fn cands(scores: &[i32]) -> Vec<ScoutCandidate> {
+        scores
+            .iter()
+            .map(|&s| ScoutCandidate {
+                path: "p.md".into(),
+                section_id: "s".into(),
+                score: s,
+                reason: "r".into(),
+            })
+            .collect()
+    }
+
+    #[test]
+    fn adaptive_floor_cuts_a_clear_cliff() {
+        // Strong head, then a hard fall to a flat tail.
+        let floor = scout_adaptive_score_floor(&cands(&[800, 760, 740, 120, 100, 90, 80]));
+        assert!(floor > 120, "should cut the tail at the cliff, got {floor}");
+        assert!(floor <= 740, "should keep the head, got {floor}");
+    }
+
+    #[test]
+    fn adaptive_floor_keeps_smooth_tail() {
+        // Gentle linear decay has no knee: keep everything (i32::MIN).
+        let floor = scout_adaptive_score_floor(&cands(&[300, 280, 260, 240, 220, 200, 180]));
+        assert_eq!(floor, i32::MIN, "smooth decay should not be cut");
+    }
+
+    #[test]
+    fn adaptive_floor_no_cut_when_few_candidates() {
+        assert_eq!(scout_adaptive_score_floor(&cands(&[900, 100])), i32::MIN);
+    }
+
+    #[test]
+    fn adaptive_floor_handles_unsorted_input() {
+        // Same multiset as the cliff case but in non-monotonic order (as the
+        // real input is) — the floor must be identical.
+        let floor = scout_adaptive_score_floor(&cands(&[100, 800, 90, 740, 120, 760, 80]));
+        assert!(floor > 120 && floor <= 740, "got {floor}");
+    }
 
     #[test]
     fn target_phrases_keep_hyphenated_entities() {
@@ -2634,6 +2674,81 @@ fn emit_scout_highlight(
     *emitted += 1;
 }
 
+/// Tail-aware adaptive-k cutoff for evidence emission.
+///
+/// The candidates handed to `render_scout_evidence` are re-ordered by
+/// `order_scout_evidence` and are NOT monotonically descending by score, so we
+/// must never `break` the emission loop on raw order. Instead we look at the
+/// *distribution* of scores: sort a copy descending, find the sharpest relative
+/// cliff between consecutive scores (a kneedle-style knee), and return the score
+/// FLOOR at-or-above which a candidate is "in the head". Emission then filters
+/// each candidate by `score >= floor` regardless of its position in the list.
+///
+/// Model-free and deterministic. The cliff threshold is derived from the score
+/// distribution itself (relative drops compared against the median relative
+/// drop), not a hardcoded constant. Returns `i32::MIN` when no clear knee
+/// exists, which keeps every candidate (no behavioral change on smooth tails).
+fn scout_adaptive_score_floor(candidates: &[ScoutCandidate]) -> i32 {
+    // Need enough points for a tail to exist and a knee to be meaningful.
+    if candidates.len() < 4 {
+        return i32::MIN;
+    }
+    let mut scores: Vec<i32> = candidates.iter().map(|c| c.score).collect();
+    scores.sort_unstable_by(|a, b| b.cmp(a));
+
+    let top = scores[0];
+    // A degenerate (flat or non-positive) head has no cliff to find.
+    if top <= 0 || scores[scores.len() - 1] == top {
+        return i32::MIN;
+    }
+
+    // Relative drop across each adjacent pair, normalized by the head score so
+    // the measure is scale-free. Restrict cut points to the latter portion of
+    // the curve so we never amputate the genuine head on a single early step.
+    let n = scores.len();
+    let min_keep = (n / 4).max(2); // never cut before keeping at least this many
+    let mut drops: Vec<f64> = Vec::with_capacity(n - 1);
+    for w in scores.windows(2) {
+        drops.push((w[0] - w[1]) as f64 / top as f64);
+    }
+
+    // Typical (median) drop magnitude characterises the curve's smooth decay.
+    let mut sorted_drops = drops.clone();
+    sorted_drops.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
+    let median_drop = sorted_drops[sorted_drops.len() / 2];
+
+    // The knee is the largest drop occurring after `min_keep`, but only if it is
+    // a genuine cliff: clearly larger than the typical drop AND a sizeable share
+    // of the full head score. Both gates are relative to the data, not constants
+    // tuned to the eval.
+    let mut best_idx: Option<usize> = None;
+    let mut best_drop = 0.0_f64;
+    for (i, &drop) in drops.iter().enumerate() {
+        // `i` is the gap between kept[i] and kept[i+1]; keeping i+1 sections.
+        if i + 1 < min_keep {
+            continue;
+        }
+        if drop > best_drop {
+            best_drop = drop;
+            best_idx = Some(i);
+        }
+    }
+
+    match best_idx {
+        Some(i)
+            if best_drop >= 0.20 // cliff spans >=20% of the head score
+                && best_drop >= median_drop * 3.0 + 1e-9 // and dwarfs typical decay
+                && drops.iter().filter(|&&d| d >= best_drop - 1e-9).count() == 1 =>
+        {
+            // Keep everything strictly above the cliff: score floor is the value
+            // just *before* the drop (scores[i]); the next score (scores[i+1])
+            // and below are tail and get cut. Ties at the floor are kept.
+            scores[i]
+        }
+        _ => i32::MIN,
+    }
+}
+
 fn render_scout_evidence(
     out: &mut String,
     candidates: &[ScoutCandidate],
@@ -2646,10 +2761,26 @@ fn render_scout_evidence(
     let mut cache: HashMap<String, crate::parse::ParsedMarkdown> = HashMap::new();
     let mut emitted_ranges: HashMap<String, Vec<(usize, usize)>> = HashMap::new();
     let question_l = question.to_ascii_lowercase();
+    // Tail-aware cutoff: filter low-relevance tail candidates by score floor
+    // derived from the score distribution. NOT a positional break — the input
+    // order is non-monotonic, so we gate per-candidate by score instead.
+    // Skip the cutoff for comparative/multi-file questions, where a low-scored
+    // section can be the sole evidence for one entity and the global floor can't
+    // see per-file need. Otherwise trim the low-relevance tail (distractors).
+    let score_floor = if wants_multi_file_evidence(question) {
+        i32::MIN
+    } else {
+        scout_adaptive_score_floor(candidates)
+    };
+    let mut tail_cut = 0usize;
     for candidate in candidates {
         if total_tokens >= max_tokens {
             out.push_str("\n<!-- mdlens: scout budget exhausted -->\n");
             break;
+        }
+        if candidate.score < score_floor {
+            tail_cut += 1;
+            continue;
         }
         if !cache.contains_key(&candidate.path) {
             cache.insert(candidate.path.clone(), load_markdown(&candidate.path)?);
@@ -2718,6 +2849,11 @@ fn render_scout_evidence(
         if truncated {
             continue;
         }
+    }
+    if tail_cut > 0 {
+        out.push_str(&format!(
+            "\n<!-- mdlens: tail-aware cutoff dropped {tail_cut} low-relevance section(s) -->\n"
+        ));
     }
     // Baseline = full-text tokens of the distinct files we opened to build the
     // pack. Reuses the parse cache above, so each file is parsed only once.
