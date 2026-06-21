@@ -2642,15 +2642,39 @@ fn render_scout_evidence(
     baseline_out: &mut usize,
 ) -> Result<()> {
     let mut total_tokens = 0usize;
-    let mut emitted_sigs: Vec<HashSet<String>> = Vec::new();
     let mut cache: HashMap<String, crate::parse::ParsedMarkdown> = HashMap::new();
     let mut emitted_ranges: HashMap<String, Vec<(usize, usize)>> = HashMap::new();
     let question_l = question.to_ascii_lowercase();
-    for candidate in candidates {
-        if total_tokens >= max_tokens {
-            out.push_str("\n<!-- mdlens: scout budget exhausted -->\n");
-            break;
-        }
+
+    // Submodular facility-location selection of evidence sections.
+    //
+    // Generalizes the earlier in-order greedy + near-duplicate skip into a
+    // proper greedy facility-location loop: at each step we pick the unselected
+    // candidate that maximizes its marginal value
+    //
+    //     value = relevance - LAMBDA * max_sim(candidate, already_selected)
+    //
+    // where relevance is the candidate's scout score and similarity is the
+    // token-set Jaccard over the same `sig` HashSet machinery the old MMR skip
+    // used. This rewards coverage (diverse, non-redundant evidence) instead of
+    // merely suppressing exact near-duplicates, while staying pure-Rust,
+    // deterministic, and model-free.
+    const LAMBDA: f64 = 0.5;
+
+    // Pre-compute per-candidate static data once: each candidate's content
+    // signature, scout-relevance, and original ordering index (used for stable
+    // tie-breaks). The actual budget-capped content is re-extracted at emit
+    // time, but the similarity signature is taken over a fixed 650-token cap so
+    // selection order does not depend on the running budget.
+    struct ScoredCandidate<'a> {
+        candidate: &'a ScoutCandidate,
+        order: usize,
+        relevance: f64,
+        sig: HashSet<String>,
+    }
+
+    let mut pool: Vec<ScoredCandidate> = Vec::new();
+    for (order, candidate) in candidates.iter().enumerate() {
         if !cache.contains_key(&candidate.path) {
             cache.insert(candidate.path.clone(), load_markdown(&candidate.path)?);
         }
@@ -2661,43 +2685,97 @@ fn render_scout_evidence(
         if is_low_value_section_for_question(section, &question_l) {
             continue;
         }
-        let ranges = emitted_ranges.entry(candidate.path.clone()).or_default();
-        if ranges.iter().any(|(start, end)| {
-            section.line_start <= *start
-                && section.line_end >= *end
-                && (section.line_end - section.line_start) > (*end - *start)
-        }) {
-            continue;
+        let ancestors = section_ancestors(&parsed.doc.sections, &section.id);
+        // Fixed-cap extraction purely for the similarity signature.
+        let (sig_content, _) =
+            scout_section_content(section, &ancestors, &parsed.lines, question, 650);
+        let sig: HashSet<String> = sig_content
+            .split_whitespace()
+            .filter(|w| w.len() >= 4)
+            .map(|w| w.to_ascii_lowercase())
+            .collect();
+        pool.push(ScoredCandidate {
+            candidate,
+            order,
+            relevance: f64::from(candidate.score),
+            sig,
+        });
+    }
+
+    fn jaccard(a: &HashSet<String>, b: &HashSet<String>) -> f64 {
+        if a.is_empty() || b.is_empty() {
+            return 0.0;
         }
+        let inter = a.intersection(b).count();
+        let uni = (a.len() + b.len()).saturating_sub(inter).max(1);
+        inter as f64 / uni as f64
+    }
+
+    let mut selected_sigs: Vec<HashSet<String>> = Vec::new();
+    let mut omitted_near_dup = false;
+
+    while total_tokens < max_tokens {
+        // Greedily pick the unselected, range-admissible candidate with the
+        // highest marginal facility-location value. Ties break on relevance,
+        // then on the original ordering index, keeping selection deterministic.
+        let mut best: Option<usize> = None;
+        let mut best_value = f64::NEG_INFINITY;
+        let mut best_relevance = f64::NEG_INFINITY;
+        let mut best_order = usize::MAX;
+        for (i, sc) in pool.iter().enumerate() {
+            let section = cache
+                .get(&sc.candidate.path)
+                .expect("cached parsed markdown")
+                .doc
+                .find_section_by_id(&sc.candidate.section_id)
+                .expect("section validated during pre-pass");
+            // Within-file range-overlap dedup against already-emitted sections.
+            if let Some(ranges) = emitted_ranges.get(&sc.candidate.path) {
+                if ranges.iter().any(|(start, end)| {
+                    section.line_start <= *start
+                        && section.line_end >= *end
+                        && (section.line_end - section.line_start) > (*end - *start)
+                }) {
+                    continue;
+                }
+            }
+            let max_sim = selected_sigs
+                .iter()
+                .map(|s| jaccard(&sc.sig, s))
+                .fold(0.0_f64, f64::max);
+            let value = sc.relevance - LAMBDA * max_sim;
+            if value > best_value
+                || (value == best_value
+                    && (sc.relevance > best_relevance
+                        || (sc.relevance == best_relevance && sc.order < best_order)))
+            {
+                best = Some(i);
+                best_value = value;
+                best_relevance = sc.relevance;
+                best_order = sc.order;
+            }
+        }
+        let Some(idx) = best else {
+            break;
+        };
+        let sc = pool.swap_remove(idx);
+        let candidate = sc.candidate;
+
+        let parsed = cache.get(&candidate.path).expect("cached parsed markdown");
+        let section = parsed
+            .doc
+            .find_section_by_id(&candidate.section_id)
+            .expect("section validated during pre-pass");
         let remaining = max_tokens.saturating_sub(total_tokens);
         let section_budget = remaining.min(650);
         let ancestors = section_ancestors(&parsed.doc.sections, &section.id);
-        let (content, truncated) =
+        let (content, _truncated) =
             scout_section_content(section, &ancestors, &parsed.lines, question, section_budget);
         let emitted_tokens = estimate_tokens(&content);
         if emitted_tokens == 0 {
             continue;
         }
-        // MMR: skip a section that near-duplicates one already emitted (e.g. a
-        // block copied across files), reinvesting the budget in new evidence.
-        // The size floor avoids false-positive dedup on tiny sections that share
-        // a couple of long tokens.
-        let sig: HashSet<String> = content
-            .split_whitespace()
-            .filter(|w| w.len() >= 4)
-            .map(|w| w.to_ascii_lowercase())
-            .collect();
-        if sig.len() >= 12
-            && emitted_sigs.iter().any(|e| {
-                let inter = sig.intersection(e).count();
-                let uni = (sig.len() + e.len()).saturating_sub(inter).max(1);
-                inter as f64 / uni as f64 > 0.6
-            })
-        {
-            // Signal the omission so the agent knows the pack was de-duplicated.
-            out.push_str("\n<!-- mdlens: omitted a near-duplicate section -->\n");
-            continue;
-        }
+
         out.push_str(&format!(
             "\n--- {} §{} {} l{}-{} ~{}t reason={} ---\n",
             candidate.path,
@@ -2712,12 +2790,27 @@ fn render_scout_evidence(
         if !content.ends_with('\n') {
             out.push('\n');
         }
-        ranges.push((section.line_start, section.line_end));
+        emitted_ranges
+            .entry(candidate.path.clone())
+            .or_default()
+            .push((section.line_start, section.line_end));
         total_tokens += emitted_tokens;
-        emitted_sigs.push(sig);
-        if truncated {
-            continue;
+        // Flag when the diversity penalty made a high-similarity section lose
+        // out, so the agent knows the pack favored coverage over a near-dup.
+        if !sc.sig.is_empty()
+            && selected_sigs
+                .iter()
+                .any(|s| jaccard(&sc.sig, s) > 0.6)
+        {
+            omitted_near_dup = true;
         }
+        selected_sigs.push(sc.sig);
+    }
+    if total_tokens >= max_tokens {
+        out.push_str("\n<!-- mdlens: scout budget exhausted -->\n");
+    }
+    if omitted_near_dup {
+        out.push_str("\n<!-- mdlens: facility-location favored diverse evidence -->\n");
     }
     // Baseline = full-text tokens of the distinct files we opened to build the
     // pack. Reuses the parse cache above, so each file is parsed only once.
