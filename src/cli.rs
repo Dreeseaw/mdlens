@@ -1001,10 +1001,6 @@ fn scout_queries(question: &str) -> Vec<String> {
         }
     }
 
-    for phrase in scout_semantic_queries(question) {
-        push_unique_query(&mut queries, phrase);
-    }
-
     let signal_tokens = signal_tokens(question);
     for token in signal_tokens.into_iter().take(8) {
         if token.len() >= 8
@@ -1232,18 +1228,8 @@ fn scout_heading_score(section_path: &[String], section_title: &str, question: &
         ("hyperparameter", "hyperparameter", 75),
         ("limitation", "limitation", 90),
         ("caveat", "caveat", 90),
-        ("good fit", "for you", 130),
-        ("compared", "for you", 90),
-        ("yourself", "for you", 90),
-        ("proxy", "proxy", 120),
         ("external", "external", 45),
-        ("caveat", "finding", 50),
-        ("caveat", "bottom line", 35),
-        ("caveat", "unambiguous", 55),
-        ("uniformly", "unambiguous", 55),
         ("conclude", "conclude", 70),
-        ("conclude", "bottom line", 65),
-        ("why", "finding", 35),
         ("why", "conclude", 35),
         ("analysis", "analysis", 45),
         ("failure", "failure", 55),
@@ -1266,27 +1252,11 @@ fn scout_heading_score(section_path: &[String], section_title: &str, question: &
         ("treat", "policy", 70),
         ("treat", "rule", 70),
         ("treat", "risk", 65),
-        ("reflected", "policy", 65),
-        ("reflection", "policy", 65),
-        ("glare", "risk", 65),
-        ("corrupted", "risk", 55),
-        ("current", "current loader", 90),
-        ("loader", "current loader", 90),
-        ("flag", "current loader", 85),
-        ("flag", "do not use", 75),
-        ("stale", "do not use", 95),
-        ("still", "do not use", 70),
-        ("recommended", "current loader", 85),
         ("direction", "recommendation", 45),
     ] {
         if question_l.contains(needle) && heading_l.contains(heading) {
             score += weight;
         }
-    }
-    if (question_l.contains("hard") || question_l.contains("remains"))
-        && heading_l.contains("ambiguity")
-    {
-        score += 80;
     }
     for (low_value, penalty) in [
         ("license", 70),
@@ -1420,78 +1390,6 @@ fn wants_multi_file_evidence(question: &str) -> bool {
     ]
     .iter()
     .any(|needle| format!(" {question_l} ").contains(needle))
-}
-
-fn scout_semantic_queries(question: &str) -> Vec<String> {
-    let question_l = question.to_ascii_lowercase();
-    let mut queries = Vec::new();
-
-    if question_l.contains("external") {
-        queries.push("external".to_string());
-        if question_l.contains("proxy") {
-            queries.push("proxy".to_string());
-        }
-        if question_l.contains("panel") {
-            queries.push("panel".to_string());
-            queries.push("agreement".to_string());
-        }
-    }
-    if question_l.contains("caveat")
-        || question_l.contains("not specify")
-        || question_l.contains("does not specify")
-        || question_l.contains("uniformly")
-    {
-        queries.push("caveat".to_string());
-        queries.push("not uniformly".to_string());
-        queries.push("not specified".to_string());
-    }
-    if question_l.contains("compare")
-        || question_l.contains("compared")
-        || question_l.contains("difference")
-        || question_l.contains("changed")
-    {
-        queries.push("compared".to_string());
-        queries.push("difference".to_string());
-    }
-    if question_l.contains("best") && question_l.contains("candidate") {
-        queries.push("best candidate".to_string());
-    }
-    if question_l.contains("failure") && question_l.contains("analysis") {
-        queries.push("failure analysis".to_string());
-    }
-    if question_l.contains("recommend") || question_l.contains("policy direction") {
-        queries.push("recommendation".to_string());
-    }
-    if question_l.contains("why")
-        || question_l.contains("rule")
-        || question_l.contains("policy")
-        || question_l.contains("privacy")
-        || question_l.contains("safety")
-        || question_l.contains("hazard")
-        || question_l.contains("counting")
-        || question_l.contains("treat")
-        || question_l.contains("reflected")
-        || question_l.contains("reflection")
-        || question_l.contains("glare")
-        || question_l.contains("corrupted")
-    {
-        queries.push("policy".to_string());
-        queries.push("rule".to_string());
-        queries.push("known risk".to_string());
-    }
-    if question_l.contains("stale")
-        || question_l.contains("current")
-        || question_l.contains("recommended")
-        || question_l.contains("still")
-        || question_l.contains("flag")
-        || question_l.contains("loader")
-    {
-        queries.push("current loader".to_string());
-        queries.push("do not use".to_string());
-        queries.push("stale flag".to_string());
-    }
-
-    queries
 }
 
 fn push_unique_query(queries: &mut Vec<String>, query: String) {
