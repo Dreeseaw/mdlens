@@ -9,22 +9,31 @@
 //!
 //! Recording is best-effort and never affects command output, so determinism of
 //! results is preserved. Set `MDLENS_NO_GAIN=1` to disable tracking entirely.
+//! The history file is plain append-only text — truncate it any time with
+//! `mdlens gain --reset --yes`, or `tail -n 1000 <file> | sponge <file>`.
 
 use anyhow::Result;
 use serde::{Deserialize, Serialize};
 use std::fs::{self, OpenOptions};
 use std::io::Write;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 /// One recorded invocation. Mirrors RTK's `commands` row (minus exec time).
-#[derive(Serialize, Deserialize)]
+///
+/// All fields are `#[serde(default)]` so that if this struct gains fields in a
+/// future version, old history lines still deserialize instead of silently
+/// dropping (which would zero a user's accumulated history). Keep it that way.
+#[derive(Serialize, Deserialize, Default)]
 pub struct Record {
+    #[serde(default)]
     pub ts: u64,
+    #[serde(default)]
     pub cmd: String,
+    #[serde(default)]
     pub input_tokens: usize,
+    #[serde(default)]
     pub output_tokens: usize,
-    pub project: String,
 }
 
 /// Where the append-only history lives (XDG data dir; overridable for tests).
@@ -36,6 +45,23 @@ fn history_path() -> Option<PathBuf> {
         .map(PathBuf::from)
         .or_else(|| std::env::var_os("HOME").map(|h| PathBuf::from(h).join(".local/share")))?;
     Some(base.join("mdlens").join("history.jsonl"))
+}
+
+/// Append a pre-serialized line to the history file, refusing to follow a
+/// symlinked target (so a planted symlink can't redirect our writes elsewhere).
+fn append_record(path: &Path, line: &str) -> std::io::Result<()> {
+    if let Ok(meta) = fs::symlink_metadata(path) {
+        if meta.file_type().is_symlink() {
+            return Err(std::io::Error::other("history path is a symlink"));
+        }
+    }
+    if let Some(parent) = path.parent() {
+        if !parent.as_os_str().is_empty() {
+            fs::create_dir_all(parent)?;
+        }
+    }
+    let mut f = OpenOptions::new().create(true).append(true).open(path)?;
+    f.write_all(line.as_bytes())
 }
 
 /// Append one usage record. Best-effort: any failure is silently ignored so
@@ -51,26 +77,17 @@ pub fn record(cmd: &str, input_tokens: usize, output_tokens: usize) {
         .duration_since(UNIX_EPOCH)
         .map(|d| d.as_secs())
         .unwrap_or(0);
-    let project = std::env::current_dir()
-        .map(|p| p.display().to_string())
-        .unwrap_or_default();
     let rec = Record {
         ts,
         cmd: cmd.to_string(),
         input_tokens,
         output_tokens,
-        project,
     };
     let Ok(mut line) = serde_json::to_string(&rec) else {
         return;
     };
     line.push('\n');
-    if let Some(parent) = path.parent() {
-        let _ = fs::create_dir_all(parent);
-    }
-    if let Ok(mut f) = OpenOptions::new().create(true).append(true).open(&path) {
-        let _ = f.write_all(line.as_bytes());
-    }
+    let _ = append_record(&path, &line);
 }
 
 /// Per-command rollup.
@@ -124,8 +141,12 @@ fn pct(input: u128, output: u128) -> f64 {
     if input == 0 {
         0.0
     } else {
-        saved(input, output) as f64 / input as f64 * 100.0
+        round1(saved(input, output) as f64 / input as f64 * 100.0)
     }
+}
+
+fn round1(x: f64) -> f64 {
+    (x * 10.0).round() / 10.0
 }
 
 /// Thousands-separated integer (e.g. 1,783).
@@ -144,6 +165,14 @@ fn fmt_int(n: i128) -> String {
         out.push(c);
     }
     out
+}
+
+/// Replace control characters so an untrusted history value (e.g. a planted
+/// `cmd`) can't emit ANSI/OSC escapes into the user's terminal when printed.
+fn sanitize(s: &str) -> String {
+    s.chars()
+        .map(|c| if c.is_control() { '?' } else { c })
+        .collect()
 }
 
 fn render(s: &Summary) -> String {
@@ -169,7 +198,7 @@ fn render(s: &Summary) -> String {
         for c in &s.by_cmd {
             out.push_str(&format!(
                 "  {:<8} {:>6} calls   saved {} ({:.1}%)\n",
-                c.cmd,
+                sanitize(&c.cmd),
                 fmt_int(c.count as i128),
                 fmt_int(saved(c.input, c.output)),
                 pct(c.input, c.output)
@@ -209,11 +238,9 @@ fn render_json(s: &Summary) -> String {
     .unwrap_or_else(|_| "{}".to_string())
 }
 
-fn load() -> Vec<Record> {
-    let Some(path) = history_path() else {
-        return Vec::new();
-    };
-    let Ok(content) = fs::read_to_string(&path) else {
+/// Read + parse records from a specific file, tolerating malformed lines.
+fn load_from(path: &Path) -> Vec<Record> {
+    let Ok(content) = fs::read_to_string(path) else {
         return Vec::new();
     };
     content
@@ -222,9 +249,31 @@ fn load() -> Vec<Record> {
         .collect()
 }
 
+fn load() -> Vec<Record> {
+    match history_path() {
+        Some(p) => load_from(&p),
+        None => Vec::new(),
+    }
+}
+
 /// Entry point for the `gain` command.
-pub fn run_gain(json: bool, reset: bool) -> Result<()> {
+pub fn run_gain(json: bool, reset: bool, yes: bool) -> Result<()> {
     if reset {
+        let summary = aggregate(&load());
+        if summary.count == 0 {
+            println!("mdlens gain: no history to reset");
+            return Ok(());
+        }
+        let discarded = format!(
+            "{} calls / {} tokens saved",
+            fmt_int(summary.count as i128),
+            fmt_int(saved(summary.input, summary.output))
+        );
+        if !yes {
+            println!("This will discard {discarded}.");
+            println!("Re-run to confirm:  mdlens gain --reset --yes");
+            return Ok(());
+        }
         if let Some(path) = history_path() {
             match fs::remove_file(&path) {
                 Ok(()) => {}
@@ -232,7 +281,7 @@ pub fn run_gain(json: bool, reset: bool) -> Result<()> {
                 Err(e) => return Err(e.into()),
             }
         }
-        println!("mdlens gain: savings history reset");
+        println!("mdlens gain: reset ({discarded} discarded)");
         return Ok(());
     }
     let summary = aggregate(&load());
@@ -254,7 +303,6 @@ mod tests {
             cmd: cmd.to_string(),
             input_tokens: input,
             output_tokens: output,
-            project: String::new(),
         }
     }
 
@@ -280,7 +328,6 @@ mod tests {
             rec("scout", 1000, 50),
         ];
         let s = aggregate(&recs);
-        // scout saved 2850, read saved 10 → scout first
         assert_eq!(s.by_cmd[0].cmd, "scout");
         assert_eq!(s.by_cmd[0].count, 2);
         assert_eq!(saved(s.by_cmd[0].input, s.by_cmd[0].output), 2850);
@@ -305,9 +352,67 @@ mod tests {
 
     #[test]
     fn negative_savings_render_honestly() {
-        // baseline smaller than returned (e.g. tiny file) → negative saved, shown as-is.
         let s = aggregate(&[rec("read", 100, 250)]);
         assert_eq!(saved(s.input, s.output), -150);
         assert!(render(&s).contains("-150"));
+    }
+
+    #[test]
+    fn pct_rounds_to_one_decimal() {
+        // 200/290 saved = 90/290 ≈ 31.03... → 31.0
+        assert_eq!(pct(290, 200), 31.0);
+    }
+
+    #[test]
+    fn sanitize_strips_control_chars() {
+        let s = sanitize("scout\x1b[31m\x07");
+        assert!(!s.contains('\x1b'));
+        assert!(!s.contains('\x07'));
+        assert!(s.starts_with("scout"));
+    }
+
+    #[test]
+    fn append_load_roundtrip_tolerates_garbage() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("h.jsonl");
+        for r in [rec("scout", 1000, 200), rec("read", 500, 100)] {
+            let mut line = serde_json::to_string(&r).unwrap();
+            line.push('\n');
+            append_record(&path, &line).unwrap();
+        }
+        append_record(&path, "this is not json\n").unwrap();
+        let recs = load_from(&path);
+        assert_eq!(recs.len(), 2); // garbage line dropped, good lines kept
+        let s = aggregate(&recs);
+        assert_eq!(s.input, 1500);
+        assert_eq!(s.output, 300);
+    }
+
+    #[test]
+    fn load_tolerates_missing_fields() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("h.jsonl");
+        // A line written by a hypothetical older/newer version missing `ts`.
+        append_record(
+            &path,
+            "{\"cmd\":\"scout\",\"input_tokens\":10,\"output_tokens\":2}\n",
+        )
+        .unwrap();
+        let recs = load_from(&path);
+        assert_eq!(recs.len(), 1);
+        assert_eq!(recs[0].ts, 0);
+        assert_eq!(recs[0].input_tokens, 10);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn append_refuses_symlinked_history() {
+        let dir = tempfile::tempdir().unwrap();
+        let real = dir.path().join("real.txt");
+        fs::write(&real, "secret\n").unwrap();
+        let link = dir.path().join("h.jsonl");
+        std::os::unix::fs::symlink(&real, &link).unwrap();
+        assert!(append_record(&link, "x\n").is_err());
+        assert_eq!(fs::read_to_string(&real).unwrap(), "secret\n");
     }
 }

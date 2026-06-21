@@ -68,6 +68,16 @@ All commands support `--json` for machine-readable output.
 For `scout`, JSON includes `schema_version`, query expansions, selected
 candidates, and the same rendered evidence pack in `rendered_text`.
 
+## Token savings (`mdlens gain`)
+
+`scout` and `read` append a one-line usage record (baseline file tokens vs.
+tokens returned) to `~/.local/share/mdlens/history.jsonl`, and `mdlens gain`
+sums it into a savings report (`--json` for machine output). This is the one
+stateful feature; disable it with `MDLENS_NO_GAIN=1`.
+
+The history is plain append-only text. Clear it with `mdlens gain --reset --yes`,
+or truncate it directly, e.g. `tail -n 1000 ~/.local/share/mdlens/history.jsonl | sponge ~/.local/share/mdlens/history.jsonl`.
+
 ## Evals
 
 Important caveat: this eval is entirely Markdown QA/search. It is not a claim

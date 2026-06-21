@@ -49,7 +49,7 @@ enum Commands {
     Sections(SectionsArgs),
     /// Wire mdlens guidance into AI coding harnesses (CLAUDE.md, AGENTS.md, ...)
     Init(InitArgs),
-    /// Show accumulated token savings from scout/read usage
+    /// Show accumulated token savings from scout/read usage (set MDLENS_NO_GAIN=1 to disable recording)
     Gain(GainArgs),
 }
 
@@ -302,9 +302,12 @@ struct GainArgs {
     /// Output JSON (machine-readable with schema_version)
     #[arg(long)]
     json: bool,
-    /// Reset accumulated savings history to zero
+    /// Reset accumulated savings history to zero (requires --yes to confirm)
     #[arg(long)]
     reset: bool,
+    /// Confirm a destructive --reset without a prompt
+    #[arg(long)]
+    yes: bool,
 }
 
 #[derive(Clone)]
@@ -335,7 +338,7 @@ pub fn run() -> Result<()> {
 }
 
 fn cmd_gain(args: GainArgs) -> Result<()> {
-    crate::gain::run_gain(args.json, args.reset)
+    crate::gain::run_gain(args.json, args.reset, args.yes)
 }
 
 fn cmd_init(args: InitArgs) -> Result<()> {
@@ -601,9 +604,6 @@ fn cmd_read(args: ReadArgs) -> Result<()> {
         false
     };
 
-    // Record savings: full file (baseline) vs the section we return.
-    crate::gain::record("read", doc.token_estimate, estimate_tokens(&full_content));
-
     if args.json {
         let output = ReadJsonOutput {
             schema_version: 1,
@@ -625,7 +625,10 @@ fn cmd_read(args: ReadArgs) -> Result<()> {
             content: full_content,
             truncated,
         };
-        println!("{}", serde_json::to_string_pretty(&output)?);
+        // Record against the JSON the agent actually receives.
+        let json = serde_json::to_string_pretty(&output)?;
+        crate::gain::record("read", doc.token_estimate, estimate_tokens(&json));
+        println!("{json}");
     } else {
         let section = Section {
             id: section_meta.id.clone(),
@@ -643,7 +646,9 @@ fn cmd_read(args: ReadArgs) -> Result<()> {
             token_estimate: section_meta.token_estimate,
             children: Vec::new(),
         };
-        println!("{}", render_read(&section, &full_content, truncated));
+        let rendered = render_read(&section, &full_content, truncated);
+        crate::gain::record("read", doc.token_estimate, estimate_tokens(&rendered));
+        println!("{rendered}");
     }
 
     Ok(())
@@ -951,25 +956,17 @@ fn cmd_scout(args: ScoutArgs) -> Result<()> {
     out.push_str("\n[highlights]\n");
     render_scout_highlights(&mut out, &evidence_candidates, &args.question, 10)?;
     out.push_str("\n[evidence]\n");
+    // baseline_tokens: total tokens of the distinct files scout pulled evidence
+    // from (what the agent would otherwise read in full). Filled from the parse
+    // cache render_scout_evidence already builds, so no file is parsed twice.
+    let mut baseline_tokens = 0usize;
     render_scout_evidence(
         &mut out,
         &evidence_candidates,
         &args.question,
         args.max_tokens,
+        &mut baseline_tokens,
     )?;
-
-    // Record savings: full text of the distinct files scout pulled evidence
-    // from (baseline the agent would otherwise read) vs the bounded pack.
-    let mut seen_files = HashSet::new();
-    let mut baseline_tokens = 0usize;
-    for candidate in &evidence_candidates {
-        if seen_files.insert(candidate.path.clone()) {
-            if let Ok(doc) = parse_markdown(&candidate.path) {
-                baseline_tokens += doc.token_estimate;
-            }
-        }
-    }
-    crate::gain::record("scout", baseline_tokens, estimate_tokens(&out));
 
     if args.json {
         let output = ScoutJsonOutput {
@@ -982,8 +979,12 @@ fn cmd_scout(args: ScoutArgs) -> Result<()> {
             candidates: evidence_candidates,
             rendered_text: out,
         };
-        println!("{}", serde_json::to_string_pretty(&output)?);
+        // Record against what the agent actually receives (the full JSON wrapper).
+        let json = serde_json::to_string_pretty(&output)?;
+        crate::gain::record("scout", baseline_tokens, estimate_tokens(&json));
+        println!("{json}");
     } else {
+        crate::gain::record("scout", baseline_tokens, estimate_tokens(&out));
         print!("{out}");
     }
     Ok(())
@@ -2745,6 +2746,7 @@ fn render_scout_evidence(
     candidates: &[ScoutCandidate],
     question: &str,
     max_tokens: usize,
+    baseline_out: &mut usize,
 ) -> Result<()> {
     let mut total_tokens = 0usize;
     let mut cache: HashMap<String, crate::parse::ParsedMarkdown> = HashMap::new();
@@ -2802,6 +2804,9 @@ fn render_scout_evidence(
             continue;
         }
     }
+    // Baseline = full-text tokens of the distinct files we opened to build the
+    // pack. Reuses the parse cache above, so each file is parsed only once.
+    *baseline_out = cache.values().map(|p| p.doc.token_estimate).sum();
     Ok(())
 }
 
