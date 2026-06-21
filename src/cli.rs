@@ -1335,9 +1335,6 @@ fn scout_source_authority_score(
         "reference",
         "runbook",
         "known risk",
-        "export notes",
-        "current loader",
-        "annotation policy",
     ] {
         if combined.contains(marker) {
             score += 28;
@@ -1688,9 +1685,7 @@ fn score_named_sections<'a>(
             ("safety", 115),
             ("risk", 90),
             ("current", 75),
-            ("loader", 75),
             ("stale", 75),
-            ("do not use", 90),
         ] {
             if title.contains(needle) {
                 score += weight;
