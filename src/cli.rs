@@ -954,7 +954,7 @@ fn cmd_scout(args: ScoutArgs) -> Result<()> {
         out.push_str(&format!("\n[focus] {}\n", evidence_candidates[0].path));
     }
     out.push_str("\n[highlights]\n");
-    render_scout_highlights(&mut out, &evidence_candidates, &args.question, 10)?;
+    render_scout_highlights(&mut out, &evidence_candidates, &args.question, 7)?;
     out.push_str("\n[evidence]\n");
     // baseline_tokens: total tokens of the distinct files scout pulled evidence
     // from (what the agent would otherwise read in full). Filled from the parse
