@@ -45,7 +45,11 @@ so the headline aggregate excludes partial harness/model pairs.
 
 The reproducibility dataset with the Markdown corpus, locked questions, manifest,
 and run summaries is published at
-[`dreeseaw/mdlens-combined-markdown-v1`](https://huggingface.co/datasets/dreeseaw/mdlens-combined-markdown-v1).
+[`dreeseaw/mdlens-realdocs-v1`](https://huggingface.co/datasets/dreeseaw/mdlens-realdocs-v1).
+
+Note: as of v0.1.3 the published dataset is `mdlens-realdocs-v1` (real
+open-source project docs, with per-source licenses and the Claude/Codex run
+summaries). It supersedes the earlier synthetic combined corpus described above.
 
 ## `messy_markdown_v1`
 
