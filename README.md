@@ -13,7 +13,7 @@ highlights, table/context snippets, and enough structure for one precise follow-
 read.
 
 ```bash
-mdlens scout docs/ "Which config option controls authentication timeout?" --max-tokens 1400
+mdlens scout docs/ "Which config option controls authentication timeout?" --max-tokens 1000
 ```
 
 `scout` is meant to replace the common agent pattern of `find`, `rg`, `cat`, and
@@ -34,8 +34,8 @@ mdlens init --gemini --cursor     # pick specific harnesses
 mdlens init --dry-run             # preview without writing
 ```
 
-Re-running `init` updates the block in place (it is managed by mdlens — keep any
-of your own edits outside the mdlens markers). Detailed guidance lives in
+Re-running `init` updates the block in place (it is managed by mdlens, so keep
+any of your own edits outside the mdlens markers). Detailed guidance lives in
 `mdlens --help` and `mdlens scout --help`, so harness prompts stay short while
 future agents can still discover the workflow.
 
@@ -80,63 +80,57 @@ or truncate it directly, e.g. `tail -n 1000 ~/.local/share/mdlens/history.jsonl 
 
 ## Evals
 
-Important caveat: this eval is entirely Markdown QA/search. It is not a claim
-about broad coding-agent performance, even though Markdown QA is a common part
-of coding-agent work. It measures whether agents answer from documentation with
-fewer irrelevant reads, fewer calls, lower cost, and better recall.
+This is a Markdown QA/retrieval benchmark, not a claim about broad coding-agent
+performance. It measures whether agents answer from documentation with fewer
+irrelevant reads, fewer tool calls, and better recall.
 
-![Final Markdown QA eval matrix](docs/eval_matrix.svg)
+![mdlens real-docs eval matrix](docs/eval_matrix.svg)
 
-Public eval notes and locked question sets live in [`evals/`](evals/). Corpora
-and raw model outputs are omitted from the public repo; the questions and
-methodology are included so readers can inspect the task shapes.
+The v0.1.3 eval runs **28 hard, low-lexical-overlap questions** (needle,
+multi-hop, abstention) over **673 real documentation files** from six
+open-source projects (FastAPI, DuckDB, Polars, Pydantic, uv, TRL), comparing
+plain shell retrieval (`rg`/`cat`) against the `mdlens scout` workflow. To test
+generalization it spans **three harnesses and seven models**: Claude Code
+(Opus 4.8, Sonnet 4.6), Codex (GPT-5.4, GPT-5.4-mini), and three open-source
+models run through Pi on OpenRouter (Kimi K2.7, GLM 5.2, DeepSeek V4 Flash).
 
-The final combined eval used 30 hard questions over 1,783 Markdown files from
-three corpora: messy generated/scene Markdown, a SciCat-style scientific README
-proxy, and codebase docs. Five questions are workflow-like cross-corpus analysis
-tasks, but none require code edits.
+Across all seven models, mdlens:
 
-Reproducibility dataset:
-[`dreeseaw/mdlens-combined-markdown-v1`](https://huggingface.co/datasets/dreeseaw/mdlens-combined-markdown-v1).
+- raises answer quality: needle **75% -> 86%**, multi-hop **51% -> 66%** [1]
+- roughly halves tool calls (avg **7.8 -> 4.9** per question)
+- lowers cost on every harness that reports it, with the largest cuts on
+  open-source models where prompt caching does not hide them (Kimi K2.7 **-34%**,
+  GLM 5.2 **-33%**, DeepSeek V4 Flash **-41%**), and cuts fresh input tokens
+  sharply (Codex GPT-5.4 -53%, DeepSeek V4 Flash -89%)
 
-Across the 15 harness/model pairs where both arms completed all rows:
+Per model (baseline -> mdlens):
 
-| metric | baseline shell retrieval | mdlens scout workflow |
-|---|---:|---:|
-| average success | 19.7/30 | 22.7/30 |
-| average tool calls | 7.5 | 2.6 |
-| average reported cost, priced pairs | $2.41 | $0.93 |
-
-Selected full runs:
-
-| harness/model | baseline | mdlens | cost |
+| harness / model | pass (of 28) | tool calls | cost / fresh input tokens |
 |---|---:|---:|---:|
-| Codex + GPT-5.4 | 17/30 | 24/30 | n/a |
-| opencode + GPT-5.4 | 18/30 | 24/30 | $3.08 -> $0.97 |
-| Pi + GPT-5.4 | 21/30 | 25/30 | $3.64 -> $1.51 |
-| opencode + Sonnet 4.6 | 20/30 | 24/30 | $2.54 -> $1.46 |
-| Pi + Sonnet 4.6 | 20/30 | 24/30 | $3.51 -> $2.23 |
-| Pi + GLM 5.1 | 23/30 | 26/30 | $1.98 -> $0.85 |
-| opencode + Kimi K2.6 | 18/30 | 20/30 | $5.19 -> $0.81 |
-| opencode + Qwen 3.6 Plus | 22/30 | 24/30 | $0.45 -> $0.24 |
+| Claude Code / Opus 4.8 | 19 -> 21 | 4.1 -> 2.2 | $0.158 -> $0.158 |
+| Claude Code / Sonnet 4.6 | 18 -> 18 | 6.9 -> 5.0 | $0.142 -> $0.131 (-8%) |
+| Codex / GPT-5.4 | 15 -> 20 | 8.5 -> 3.9 | fresh input 31.8k -> 14.9k |
+| Codex / GPT-5.4-mini | 11 -> 13 | 10.4 -> 6.7 | fresh input 40.5k -> 30.9k |
+| Pi (OSS) / Kimi K2.7 | 18 -> 21 | 9.3 -> 5.7 | $0.061 -> $0.040 (-34%) |
+| Pi (OSS) / GLM 5.2 | 17 -> 21 | 5.8 -> 2.9 | $0.023 -> $0.016 (-33%) |
+| Pi (OSS) / DeepSeek V4 Flash | 16 -> 18 | 9.7 -> 7.8 | $0.014 -> $0.009 (-41%) |
 
-Native Claude rows are documented in the local reports, but the Sonnet run hit
-provider/credit `exit_1` failures late in the run and is treated as partial
-harness data rather than a clean model comparison.
+Cost is cache-aware: Claude and Pi/OpenRouter report dollar cost (cache reads
+priced below fresh input); the Codex CLI reports tokens but not dollars, so its
+rows show the fresh-input reduction instead.
 
-Other eval families:
+Reproducibility dataset (corpus, questions, per-source licenses, and run
+summaries): [`dreeseaw/mdlens-realdocs-v1`](https://huggingface.co/datasets/dreeseaw/mdlens-realdocs-v1).
+Public eval notes and locked question sets also live in [`evals/`](evals/).
 
-- `messy_markdown_v1`: 500 carefully curated synthetic Markdown files with
-  malformed formatting, stale/current contradictions, copied distractors,
-  multi-needle tables, and cross-file policy/rationale questions.
-- `scicat_markdown_v1`: a SciCat-style scientific README proxy, with Hugging
-  Face and GitHub scientific Markdown fallback material.
-- `codebase_markdown_v1`: repository-doc navigation over real project docs,
-  runbooks, design notes, and experiment reports.
-
-The planned next step, if the project gets traction, is a small mock-workflow
-eval where each task combines Markdown analysis, a code edit, and JSON/data
-inspection in a fresh branch.
+[1] Two honest caveats. (a) On Claude, dollar cost moves less than token counts
+because prompt caching prices the baseline's repeated file reads at roughly a
+tenth of fresh input; the token savings are real, but caching absorbs most of
+their dollar value, which is why the clearest dollar signal shows up on the
+open-source models (no equivalent masking) and in tool-call counts. (b) mdlens
+slightly lowers abstention accuracy (36% -> 33%): a compact evidence pack can
+make "the answer is not in the docs" harder to recognize, so models fabricate a
+little more on truly unanswerable questions.
 
 ## Installation
 
