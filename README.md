@@ -89,15 +89,19 @@ irrelevant reads, fewer tool calls, and better recall.
 The v0.1.3 eval runs **28 hard, low-lexical-overlap questions** (needle,
 multi-hop, abstention) over **673 real documentation files** from six
 open-source projects (FastAPI, DuckDB, Polars, Pydantic, uv, TRL), comparing
-plain shell retrieval (`rg`/`cat`) against the `mdlens scout` workflow on real
-**Claude Code** and **Codex**.
+plain shell retrieval (`rg`/`cat`) against the `mdlens scout` workflow. To test
+generalization it spans **three harnesses and seven models**: Claude Code
+(Opus 4.8, Sonnet 4.6), Codex (GPT-5.4, GPT-5.4-mini), and three open-source
+models run through Pi on OpenRouter (Kimi K2.7, GLM 5.2, DeepSeek V4 Flash).
 
-Across all four models, mdlens:
+Across all seven models, mdlens:
 
-- raises answer quality: needle **75% -> 83%**, multi-hop **48% -> 65%** [1]
-- roughly halves tool calls (avg **7.5 -> 4.5** per question)
-- cuts fresh (uncached) input tokens where caching does not hide it: Codex
-  GPT-5.4 **-53%** (31.8k -> 14.9k), GPT-5.4-mini **-24%**
+- raises answer quality: needle **75% -> 86%**, multi-hop **51% -> 66%** [1]
+- roughly halves tool calls (avg **7.8 -> 4.9** per question)
+- lowers cost on every harness that reports it, with the largest cuts on
+  open-source models where prompt caching does not hide them (Kimi K2.7 **-34%**,
+  GLM 5.2 **-33%**, DeepSeek V4 Flash **-41%**), and cuts fresh input tokens
+  sharply (Codex GPT-5.4 -53%, DeepSeek V4 Flash -89%)
 
 Per model (baseline -> mdlens):
 
@@ -105,21 +109,28 @@ Per model (baseline -> mdlens):
 |---|---:|---:|---:|
 | Claude Code / Opus 4.8 | 19 -> 21 | 4.1 -> 2.2 | $0.158 -> $0.158 |
 | Claude Code / Sonnet 4.6 | 18 -> 18 | 6.9 -> 5.0 | $0.142 -> $0.131 (-8%) |
-| Codex / GPT-5.4 | 15 -> 20 | 8.5 -> 3.9 | 31.8k -> 14.9k |
-| Codex / GPT-5.4-mini | 11 -> 13 | 10.4 -> 6.7 | 40.5k -> 30.9k |
+| Codex / GPT-5.4 | 15 -> 20 | 8.5 -> 3.9 | fresh input 31.8k -> 14.9k |
+| Codex / GPT-5.4-mini | 11 -> 13 | 10.4 -> 6.7 | fresh input 40.5k -> 30.9k |
+| Pi (OSS) / Kimi K2.7 | 18 -> 21 | 9.3 -> 5.7 | $0.061 -> $0.040 (-34%) |
+| Pi (OSS) / GLM 5.2 | 17 -> 21 | 5.8 -> 2.9 | $0.023 -> $0.016 (-33%) |
+| Pi (OSS) / DeepSeek V4 Flash | 16 -> 18 | 9.7 -> 7.8 | $0.014 -> $0.009 (-41%) |
+
+Cost is cache-aware: Claude and Pi/OpenRouter report dollar cost (cache reads
+priced below fresh input); the Codex CLI reports tokens but not dollars, so its
+rows show the fresh-input reduction instead.
 
 Reproducibility dataset (corpus, questions, per-source licenses, and run
 summaries): [`dreeseaw/mdlens-realdocs-v1`](https://huggingface.co/datasets/dreeseaw/mdlens-realdocs-v1).
 Public eval notes and locked question sets also live in [`evals/`](evals/).
 
-[1] Two honest caveats. (a) Dollar cost moves less than token counts on Claude
+[1] Two honest caveats. (a) On Claude, dollar cost moves less than token counts
 because prompt caching prices the baseline's repeated file reads at roughly a
 tenth of fresh input; the token savings are real, but caching absorbs most of
-their dollar value, so the clearest cost signal shows up on Codex (no equivalent
-masking) and in tool-call counts. (b) mdlens slightly lowers abstention accuracy
-(33% -> 25%, n=24): a compact evidence pack can make "the answer is not in the
-docs" harder to recognize, so models fabricate a little more on truly
-unanswerable questions.
+their dollar value, which is why the clearest dollar signal shows up on the
+open-source models (no equivalent masking) and in tool-call counts. (b) mdlens
+slightly lowers abstention accuracy (36% -> 33%): a compact evidence pack can
+make "the answer is not in the docs" harder to recognize, so models fabricate a
+little more on truly unanswerable questions.
 
 ## Installation
 
