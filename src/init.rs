@@ -22,7 +22,7 @@ When answering questions over Markdown files or documentation directories, prefe
 For question answering over a Markdown directory, start with:
 
 ```bash
-mdlens scout <dir> \"<question>\" --max-tokens 1400
+mdlens scout <dir> \"<question>\" --max-tokens 1000
 ```
 
 Answer from `[highlights]` and `[evidence]` when they are sufficient. If exactly one detail is missing, use a section id from `[files]`:
@@ -31,7 +31,7 @@ Answer from `[highlights]` and `[evidence]` when they are sufficient. If exactly
 mdlens read <file> --id <section-id> --max-tokens 1200
 ```
 
-Avoid reading whole Markdown files unless scout clearly found the wrong file. Preserve exact short source terms such as flags, IDs, option names, metrics, table values, and policy phrases. Run `mdlens --help` once if you need command guidance.";
+Avoid reading whole Markdown files unless scout clearly found the wrong file. Preserve exact short source terms such as flags, IDs, option names, metrics, table values, and policy phrases. scout always returns the nearest sections even when the answer is not in the docs, so answer only from evidence that states it — if the specific fact is absent, say the documentation does not specify it rather than guessing. Run `mdlens --help` once if you need command guidance.";
 
 /// Cursor only loads rules from `.mdc` files with YAML frontmatter, so its
 /// dedicated rule file is seeded with this when first created.
